@@ -4,24 +4,71 @@ OpenClaw reader service — reads openclaw.json and session JSONL files.
 from __future__ import annotations
 
 import json
-import os
+import time
 from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
 from app.models import AgentIdentity, AgentInfo, SessionInfo
+from app.services.pricing import estimate_cost
 
+# ---------------------------------------------------------------------------
+# Simple TTL cache (30 seconds)
+# ---------------------------------------------------------------------------
+
+_CACHE_TTL = 30.0  # seconds
+
+# Cache entries: { key: (value, timestamp) }
+_cache: dict[str, tuple[Any, float]] = {}
+
+
+def _cache_get(key: str) -> Any:
+    """Return cached value if still within TTL, else None."""
+    entry = _cache.get(key)
+    if entry is None:
+        return None
+    value, ts = entry
+    if time.monotonic() - ts > _CACHE_TTL:
+        del _cache[key]
+        return None
+    return value
+
+
+def _cache_set(key: str, value: Any) -> None:
+    """Store value in cache with current timestamp."""
+    _cache[key] = (value, time.monotonic())
+
+
+def _cache_invalidate(key: str) -> None:
+    """Remove a key from the cache."""
+    _cache.pop(key, None)
+
+
+# ---------------------------------------------------------------------------
+# Core reader functions
+# ---------------------------------------------------------------------------
 
 def _get_openclaw_config() -> dict[str, Any]:
-    """Load and return the openclaw.json config dict."""
+    """Load and return the openclaw.json config dict. Cached for TTL seconds."""
+    cache_key = "openclaw_config"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     config_path = Path(settings.OPENCLAW_CONFIG_PATH)
     if not config_path.exists():
-        return {}
+        result: dict[str, Any] = {}
+        _cache_set(cache_key, result)
+        return result
     try:
         with open(config_path) as f:
-            return json.load(f)
+            result = json.load(f)
+        _cache_set(cache_key, result)
+        return result
     except Exception:
-        return {}
+        result = {}
+        _cache_set(cache_key, result)
+        return result
 
 
 def _get_agents_dir() -> Path:
@@ -84,7 +131,14 @@ def get_sessions_for_agent(agent_id: str) -> list[SessionInfo]:
 
 
 def _read_sessions_for_agent(agent_id: str, session_dir: Path) -> list[SessionInfo]:
+    """Read all sessions for an agent. Results are cached per session_dir path."""
+    cache_key = f"sessions:{session_dir}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     if not session_dir.exists():
+        _cache_set(cache_key, [])
         return []
 
     sessions: list[SessionInfo] = []
@@ -104,6 +158,7 @@ def _read_sessions_for_agent(agent_id: str, session_dir: Path) -> list[SessionIn
         pass
 
     sessions.sort(key=lambda s: s.started_at or "", reverse=True)
+    _cache_set(cache_key, sessions)
     return sessions
 
 
@@ -149,6 +204,9 @@ def _parse_session_file(agent_id: str, path: Path, is_active: bool) -> SessionIn
                 if line_no > 10000:
                     break
 
+        # Estimate cost from tokens × model rate (proxy often reports 0)
+        estimated_cost = estimate_cost(model or "", input_tokens, output_tokens)
+
         return SessionInfo(
             id=session_id,
             agent_id=agent_id,
@@ -161,6 +219,7 @@ def _parse_session_file(agent_id: str, path: Path, is_active: bool) -> SessionIn
             output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
             model=model,
+            estimated_cost=estimated_cost,
         )
     except Exception:
         return None

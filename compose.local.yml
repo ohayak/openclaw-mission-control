@@ -1,0 +1,74 @@
+# Simple local dev setup — no Traefik, no domain vars, no adminer.
+# Usage: docker compose -f compose.local.yml up
+services:
+
+  db:
+    image: postgres:18
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-missioncontrol} -d ${POSTGRES_DB:-missioncontrol}"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 10s
+    volumes:
+      - local-db-data:/var/lib/postgresql/data/pgdata
+    environment:
+      - PGDATA=/var/lib/postgresql/data/pgdata
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-missioncontrol}
+      - POSTGRES_USER=${POSTGRES_USER:-missioncontrol}
+      - POSTGRES_DB=${POSTGRES_DB:-missioncontrol}
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: "no"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # Mount OpenClaw data directory read-only for agent/session data access
+      - /data/.openclaw:/data/.openclaw:ro
+      # Mount backend source for hot-reload
+      - ./backend:/app/backend
+    environment:
+      - ENVIRONMENT=local
+      - SECRET_KEY=${SECRET_KEY:-localsecretkey_change_in_production}
+      - FIRST_SUPERUSER=${FIRST_SUPERUSER:-admin@example.com}
+      - FIRST_SUPERUSER_PASSWORD=${FIRST_SUPERUSER_PASSWORD:-changethis}
+      - FRONTEND_HOST=http://localhost:5173
+      - BACKEND_CORS_ORIGINS=http://localhost:5173
+      - POSTGRES_SERVER=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-missioncontrol}
+      - POSTGRES_USER=${POSTGRES_USER:-missioncontrol}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-missioncontrol}
+      - OPENCLAW_CONFIG_PATH=/data/.openclaw/openclaw.json
+      - OPENCLAW_AGENTS_DIR=/data/.openclaw/agents
+      - PACT_PROJECTS_DIR=/data/.openclaw/workspace
+    command:
+      - fastapi
+      - run
+      - --reload
+      - "app/main.py"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        - VITE_API_URL=http://localhost:8000
+        - NODE_ENV=development
+    restart: "no"
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  local-db-data:

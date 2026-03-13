@@ -67,7 +67,7 @@ class EventBus:
             project_id=project_id,
             message=message,
             timestamp=datetime.now(timezone.utc).isoformat(),
-            metadata=metadata,
+            event_metadata=metadata,
         )
         self.publish(event)
 

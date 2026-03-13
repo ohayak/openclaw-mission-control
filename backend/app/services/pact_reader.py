@@ -39,17 +39,18 @@ def get_pact_status(project_dir: str) -> PactStatus:
         status = "idle"
 
     # Gather component stats
+    tree_file = p / "decomposition" / "tree.json"
     decomp_file = p / "decomposition" / "decomposition.json"
-    has_decomposition = decomp_file.exists()
+    has_decomposition = tree_file.exists() or decomp_file.exists()
     components = _read_components_raw(p)
     component_count = len(components)
 
     contracts_dir = p / "contracts"
     has_contracts = contracts_dir.exists() and any(contracts_dir.iterdir()) if contracts_dir.exists() else False
 
-    components_contracted = sum(1 for c in components if _component_has_contract(p, c.get("id", "")))
-    components_tested = sum(1 for c in components if _component_has_tests(p, c.get("id", "")))
-    components_implemented = sum(1 for c in components if _component_has_implementation(p, c.get("id", "")))
+    components_contracted = sum(1 for c in components if _component_has_contract(p, c.get("component_id", c.get("id", ""))))
+    components_tested = sum(1 for c in components if _component_has_tests(p, c.get("component_id", c.get("id", ""))))
+    components_implemented = sum(1 for c in components if _component_has_implementation(p, c.get("component_id", c.get("id", ""))))
 
     return PactStatus(
         project_id=project_dir,
@@ -71,31 +72,50 @@ def get_pact_components(project_dir: str) -> list[PactComponent]:
     result = []
 
     for raw in components_raw:
-        cid = raw.get("id", "")
+        # Support both tree.json format (component_id) and legacy format (id)
+        cid = raw.get("component_id", raw.get("id", ""))
         has_contract = _component_has_contract(p, cid)
         has_tests = _component_has_tests(p, cid)
         has_impl = _component_has_implementation(p, cid)
 
-        # Read test results if available
+        # Read test results if available from tree.json or results file
         test_passed = None
         test_failed = None
         test_total = None
-        results_file = p / "tests" / cid / "results.json"
-        if results_file.exists():
-            try:
-                results = json.loads(results_file.read_text())
-                test_passed = results.get("passed")
-                test_failed = results.get("failed")
-                test_total = results.get("total")
-            except Exception:
-                pass
+
+        # Try tree.json test_results first
+        tree_test_results = raw.get("test_results")
+        if tree_test_results and isinstance(tree_test_results, dict):
+            test_passed = tree_test_results.get("passed")
+            test_failed = tree_test_results.get("failed")
+            test_total = tree_test_results.get("total")
+        else:
+            # Fall back to results.json file
+            results_file = p / "tests" / cid / "results.json"
+            if results_file.exists():
+                try:
+                    results = json.loads(results_file.read_text())
+                    test_passed = results.get("passed")
+                    test_failed = results.get("failed")
+                    test_total = results.get("total")
+                except Exception:
+                    pass
+
+        # Map tree.json depth/parent_id to layer (depth-based)
+        depth = raw.get("depth")
+        layer = raw.get("layer")
+        if layer is None and depth is not None:
+            layer = f"depth-{depth}"
+
+        # Dependencies from children or explicit dependencies field
+        dependencies = raw.get("dependencies", raw.get("children", []))
 
         result.append(PactComponent(
             id=cid,
             name=raw.get("name", cid),
             description=raw.get("description"),
-            layer=raw.get("layer"),
-            dependencies=raw.get("dependencies", []),
+            layer=layer,
+            dependencies=dependencies,
             has_contract=has_contract,
             has_tests=has_tests,
             has_implementation=has_impl,
@@ -133,6 +153,30 @@ def get_pact_health(project_dir: str) -> PactHealth:
 # ---------------------------------------------------------------------------
 
 def _read_components_raw(project_path: Path) -> list[dict]:
+    """
+    Read components from tree.json (new PACT format) first, falling back
+    to decomposition.json (legacy format).
+
+    tree.json format:
+      {"root_id": "root", "nodes": {"cid": {"component_id": "cid", "name": ..., ...}}}
+
+    decomposition.json format:
+      {"components": [{"id": "cid", "name": ..., ...}]}
+    """
+    # Try tree.json first (new PACT format)
+    tree_file = project_path / "decomposition" / "tree.json"
+    if tree_file.exists():
+        try:
+            data = json.loads(tree_file.read_text())
+            nodes = data.get("nodes", {})
+            if isinstance(nodes, dict):
+                # Exclude the virtual root node
+                root_id = data.get("root_id", "root")
+                return [v for k, v in nodes.items() if k != root_id and isinstance(v, dict)]
+        except Exception:
+            pass
+
+    # Fall back to legacy decomposition.json format
     decomp_file = project_path / "decomposition" / "decomposition.json"
     if not decomp_file.exists():
         return []
@@ -146,8 +190,9 @@ def _read_components_raw(project_path: Path) -> list[dict]:
 
 def _infer_phase(p: Path) -> str:
     """Infer PACT phase from filesystem state when daemon isn't running."""
+    tree_file = p / "decomposition" / "tree.json"
     decomp_file = p / "decomposition" / "decomposition.json"
-    if not decomp_file.exists():
+    if not tree_file.exists() and not decomp_file.exists():
         # Check if interview questions exist
         interview_file = p / "decomposition" / "interview.json"
         return "interview" if interview_file.exists() else "shape"
@@ -156,7 +201,7 @@ def _infer_phase(p: Path) -> str:
     if not components:
         return "decompose"
 
-    cids = [c.get("id", "") for c in components]
+    cids = [c.get("component_id", c.get("id", "")) for c in components]
     all_contracted = all(_component_has_contract(p, cid) for cid in cids if cid)
     if not all_contracted:
         return "contract"
@@ -173,8 +218,10 @@ def _infer_phase(p: Path) -> str:
 
 
 def _component_has_contract(p: Path, cid: str) -> bool:
-    return (p / "contracts" / cid / "contract.json").exists() or \
-           (p / "contracts" / cid / "contract.md").exists()
+    """Check if a component has a contract. Contracts live at contracts/<cid>/interface.json or interface.py."""
+    contract_dir = p / "contracts" / cid
+    return (contract_dir / "interface.json").exists() or \
+           (contract_dir / "interface.py").exists()
 
 
 def _component_has_tests(p: Path, cid: str) -> bool:

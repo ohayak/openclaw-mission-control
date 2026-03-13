@@ -1,0 +1,10 @@
+{"type":"session","id":"abc123","timestamp":"2024-01-15T10:00:00Z","cwd":"/data/.openclaw/workspace"}
+{"type":"message","message":{"role":"user","content":"Hello, what can you do?"},"timestamp":"2024-01-15T10:00:01Z"}
+{"type":"message","message":{"role":"assistant","content":"I can help you with many tasks!","usage":{"input":15,"output":42},"model":"claude-sonnet-4-6"},"timestamp":"2024-01-15T10:00:02Z"}
+{"type":"message","message":{"role":"user","content":"Tell me about Python."},"timestamp":"2024-01-15T10:00:10Z"}
+{"type":"message","message":{"role":"assistant","content":"Python is a versatile language.","usage":{"input":20,"output":85},"model":"claude-sonnet-4-6"},"timestamp":"2024-01-15T10:00:12Z"}
+{"type":"message","message":{"role":"user","content":"Write a hello world."},"timestamp":"2024-01-15T10:00:20Z"}
+{"type":"message","message":{"role":"assistant","content":"```python\nprint('Hello, World!')\n```","usage":{"input":18,"output":30},"model":"claude-sonnet-4-6"},"timestamp":"2024-01-15T10:00:22Z"}
+{"type":"tool_use","tool":"exec","input":{"command":"python hello.py"},"timestamp":"2024-01-15T10:00:23Z"}
+{"type":"tool_result","output":"Hello, World!","timestamp":"2024-01-15T10:00:24Z"}
+{"type":"message","message":{"role":"assistant","content":"The script ran successfully!","usage":{"input":25,"output":20},"model":"claude-sonnet-4-6"},"timestamp":"2024-01-15T10:00:25Z"}

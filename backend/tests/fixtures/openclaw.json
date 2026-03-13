@@ -1,0 +1,34 @@
+{
+  "agents": {
+    "list": [
+      {
+        "id": "jim",
+        "name": "Jim",
+        "workspace": "/data/.openclaw/workspace",
+        "model": "claude-sonnet-4-6",
+        "identity": {
+          "name": "Jim Halpert",
+          "emoji": "😏",
+          "avatar": "avatars/jim.jpg",
+          "theme": "dark"
+        }
+      },
+      {
+        "id": "dwight",
+        "name": "Dwight",
+        "workspace": "/data/.openclaw/workspace/dwight",
+        "model": "claude-opus-4-6",
+        "identity": {
+          "name": "Dwight Schrute",
+          "emoji": "🥬",
+          "avatar": "avatars/dwight.jpg",
+          "theme": "dark"
+        }
+      }
+    ]
+  },
+  "gateway": {
+    "port": 3000,
+    "host": "localhost"
+  }
+}

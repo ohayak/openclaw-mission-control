@@ -289,6 +289,7 @@ class SessionInfo(SQLModel):
     output_tokens: int = 0
     total_tokens: int = 0
     model: str | None = None
+    estimated_cost: float = 0.0
 
 
 class PactPhase(str, Enum):
@@ -342,7 +343,7 @@ class ActivityEvent(SQLModel):
     project_id: str | None = None
     message: str
     timestamp: str
-    metadata: dict | None = None
+    event_metadata: dict | None = None
 
 
 class CostByAgent(SQLModel):
