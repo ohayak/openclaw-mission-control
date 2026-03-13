@@ -1,0 +1,1545 @@
+{
+  "component_id": "foundation",
+  "name": "Foundation & Infrastructure",
+  "description": "Next.js 15 project scaffolding, TypeScript strict config, Tailwind v4 + shadcn/ui setup, SQLite schema with auto-migration on startup (better-sqlite3 with WAL mode, externalized in next.config.js), simple password auth with secure cookie middleware, the lib/db/ module with typed query wrappers, shared TypeScript types in lib/types/, Zod schemas for all external inputs, app layout with dark-mode-by-default theme, responsive shell with sidebar navigation, and error boundaries at page level. Includes the login page/flow and auth middleware that gates all routes.",
+  "version": 1,
+  "types": [
+    {
+      "name": "Database",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "handle",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Opaque better-sqlite3 Database instance",
+          "validators": []
+        },
+        {
+          "name": "isOpen",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Connection status flag",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "better-sqlite3 database connection handle with WAL mode enabled"
+    },
+    {
+      "name": "MigrationResult",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "appliedCount",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of migrations applied in this run",
+          "validators": []
+        },
+        {
+          "name": "currentVersion",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Final database version after migrations",
+          "validators": []
+        },
+        {
+          "name": "migrationsRun",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of migration file names applied",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Result of migration execution"
+    },
+    {
+      "name": "ProjectId",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "_brand",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Literal 'ProjectId' for type branding",
+          "validators": []
+        },
+        {
+          "name": "value",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Underlying string value",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Branded string type for project identifiers"
+    },
+    {
+      "name": "TaskId",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "_brand",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Literal 'TaskId' for type branding",
+          "validators": []
+        },
+        {
+          "name": "value",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Underlying string value",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Branded string type for task identifiers"
+    },
+    {
+      "name": "UserId",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "_brand",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Literal 'UserId' for type branding",
+          "validators": []
+        },
+        {
+          "name": "value",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Underlying string value",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Branded string type for user identifiers"
+    },
+    {
+      "name": "Result",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "success",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "True if operation succeeded, false otherwise",
+          "validators": []
+        },
+        {
+          "name": "value",
+          "type_ref": "any",
+          "required": false,
+          "default": "",
+          "description": "Success value (present when success=true)",
+          "validators": []
+        },
+        {
+          "name": "error",
+          "type_ref": "DomainError",
+          "required": false,
+          "default": "",
+          "description": "Error value (present when success=false)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Generic Result type for error handling in data layer"
+    },
+    {
+      "name": "DomainError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "code",
+          "type_ref": "ErrorCode",
+          "required": true,
+          "default": "",
+          "description": "Error classification code",
+          "validators": []
+        },
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error description",
+          "validators": []
+        },
+        {
+          "name": "cause",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Underlying error message or context",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Typed domain-level error"
+    },
+    {
+      "name": "ErrorCode",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "NotFound",
+        "AlreadyExists",
+        "InvalidInput",
+        "DatabaseError",
+        "MigrationError",
+        "AuthError",
+        "Unknown"
+      ],
+      "inner_types": [],
+      "description": "Domain error classification"
+    },
+    {
+      "name": "SessionData",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "userId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Authenticated user ID",
+          "validators": []
+        },
+        {
+          "name": "expiresAt",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Unix timestamp (ms) when session expires",
+          "validators": []
+        },
+        {
+          "name": "createdAt",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Unix timestamp (ms) when session was created",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "User session object stored in encrypted cookie"
+    },
+    {
+      "name": "LoginRequest",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "username",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "User username",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..256",
+              "error_message": "Username must be 1-256 characters"
+            }
+          ]
+        },
+        {
+          "name": "password",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "User password (plaintext in transit, TLS required)",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..1024",
+              "error_message": "Password must be 1-1024 characters"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "API request body for login"
+    },
+    {
+      "name": "LoginResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "success",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Always true for successful login",
+          "validators": []
+        },
+        {
+          "name": "userId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Authenticated user ID",
+          "validators": []
+        },
+        {
+          "name": "expiresAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp when session expires",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "API response for successful login"
+    },
+    {
+      "name": "LogoutResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "success",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Always true for successful logout",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "API response for logout"
+    },
+    {
+      "name": "ApiError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "error",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Error code or short identifier",
+          "validators": []
+        },
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error message",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "HTTP status code",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Normalized API error response shape"
+    },
+    {
+      "name": "User",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Primary key UUID",
+          "validators": []
+        },
+        {
+          "name": "username",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique username",
+          "validators": []
+        },
+        {
+          "name": "passwordHash",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "bcrypt hash of password",
+          "validators": []
+        },
+        {
+          "name": "createdAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 creation timestamp",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "User database record (from Zod schema)"
+    },
+    {
+      "name": "Task",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Primary key UUID",
+          "validators": []
+        },
+        {
+          "name": "projectId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Foreign key to projects table",
+          "validators": []
+        },
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task title",
+          "validators": []
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Task description or body",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task status (enum: todo, in_progress, done)",
+          "validators": []
+        },
+        {
+          "name": "createdAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 creation timestamp",
+          "validators": []
+        },
+        {
+          "name": "updatedAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 last update timestamp",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Task database record (from Zod schema)"
+    },
+    {
+      "name": "Project",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Primary key UUID",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project name",
+          "validators": []
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Project description",
+          "validators": []
+        },
+        {
+          "name": "createdAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 creation timestamp",
+          "validators": []
+        },
+        {
+          "name": "updatedAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 last update timestamp",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Project database record (from Zod schema)"
+    },
+    {
+      "name": "MigrationRecord",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "version",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Migration version number",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Migration file name",
+          "validators": []
+        },
+        {
+          "name": "appliedAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp when migration was applied",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Database migration metadata record"
+    },
+    {
+      "name": "ErrorBoundaryProps",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "error",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Error object (Error instance or unknown)",
+          "validators": []
+        },
+        {
+          "name": "reset",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Function to reset error boundary state",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Props passed to error.tsx boundary component"
+    },
+    {
+      "name": "MiddlewareConfig",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "matcher",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Array of path patterns to apply middleware",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Next.js middleware configuration export"
+    },
+    {
+      "name": "NextRequest",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "url",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Request URL",
+          "validators": []
+        },
+        {
+          "name": "cookies",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Cookie store API",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Next.js request object (opaque)"
+    },
+    {
+      "name": "NextResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "status",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "HTTP status code",
+          "validators": []
+        },
+        {
+          "name": "headers",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Response headers",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Next.js response object (opaque)"
+    }
+  ],
+  "functions": [
+    {
+      "name": "initDatabase",
+      "description": "Initialize better-sqlite3 database connection with WAL mode. Creates database file if it does not exist. Sets PRAGMA journal_mode=WAL and foreign_keys=ON.",
+      "inputs": [
+        {
+          "name": "dbPath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to SQLite database file (or :memory: for in-memory)",
+          "validators": []
+        }
+      ],
+      "output_type": "Database",
+      "error_cases": [
+        {
+          "name": "DatabaseOpenError",
+          "condition": "Cannot open or create database file at dbPath",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        },
+        {
+          "name": "PragmaSetError",
+          "condition": "Cannot set WAL mode or foreign_keys pragma",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "dbPath is a valid filesystem path or ':memory:'"
+      ],
+      "postconditions": [
+        "Database connection is open",
+        "WAL mode is enabled",
+        "Foreign keys are enabled"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "dbPath",
+          "description": "Creates SQLite database file if it does not exist"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "global database connection",
+          "description": "Opens persistent database connection handle"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": 50,
+        "complexity": null
+      }
+    },
+    {
+      "name": "runMigrations",
+      "description": "Apply all pending migrations from lib/db/migrations/ directory. Uses BEGIN IMMEDIATE transaction to prevent concurrent execution. Migrations are numbered SQL files (001_initial.sql, 002_add_column.sql, etc.). Tracks applied migrations in internal 'migrations' table.",
+      "inputs": [
+        {
+          "name": "db",
+          "type_ref": "Database",
+          "required": true,
+          "default": "",
+          "description": "Open database connection",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "MigrationDirectoryNotFound",
+          "condition": "lib/db/migrations/ directory does not exist",
+          "error_type": "MigrationError",
+          "error_data": {}
+        },
+        {
+          "name": "MigrationFileMalformed",
+          "condition": "Migration file contains invalid SQL",
+          "error_type": "MigrationError",
+          "error_data": {}
+        },
+        {
+          "name": "ConcurrentMigrationAttempt",
+          "condition": "Another process is running migrations (transaction lock conflict)",
+          "error_type": "MigrationError",
+          "error_data": {}
+        },
+        {
+          "name": "DatabaseWriteError",
+          "condition": "Cannot write to migrations table or execute migration SQL",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "db.isOpen is true",
+        "lib/db/migrations/ directory exists"
+      ],
+      "postconditions": [
+        "All pending migrations are applied",
+        "migrations table is updated",
+        "Database version is current"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "lib/db/migrations/*.sql",
+          "description": "Reads migration SQL files from disk"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "database schema",
+          "description": "Executes DDL/DML statements to modify database schema"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "migrations table",
+          "description": "Inserts records for applied migrations"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 500,
+        "max_memory_mb": 20,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "closeDatabase",
+      "description": "Close database connection and release resources. Safe to call multiple times (idempotent).",
+      "inputs": [
+        {
+          "name": "db",
+          "type_ref": "Database",
+          "required": true,
+          "default": "",
+          "description": "Database connection to close",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "db.isOpen is false",
+        "Database connection is released"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "database connection",
+          "description": "Closes database connection handle"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "asProjectId",
+      "description": "Brand a string as a ProjectId. Does not validate format, only applies type branding.",
+      "inputs": [
+        {
+          "name": "value",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Raw string value to brand",
+          "validators": []
+        }
+      ],
+      "output_type": "ProjectId",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Return value has _brand='ProjectId'"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "asTaskId",
+      "description": "Brand a string as a TaskId. Does not validate format, only applies type branding.",
+      "inputs": [
+        {
+          "name": "value",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Raw string value to brand",
+          "validators": []
+        }
+      ],
+      "output_type": "TaskId",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Return value has _brand='TaskId'"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "asUserId",
+      "description": "Brand a string as a UserId. Does not validate format, only applies type branding.",
+      "inputs": [
+        {
+          "name": "value",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Raw string value to brand",
+          "validators": []
+        }
+      ],
+      "output_type": "UserId",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Return value has _brand='UserId'"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "ok",
+      "description": "Construct a successful Result with a value",
+      "inputs": [
+        {
+          "name": "value",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Success value",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "result.success is true",
+        "result.value equals input value"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "err",
+      "description": "Construct a failed Result with a DomainError",
+      "inputs": [
+        {
+          "name": "error",
+          "type_ref": "DomainError",
+          "required": true,
+          "default": "",
+          "description": "Error value",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "result.success is false",
+        "result.error equals input error"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "validateLoginRequest",
+      "description": "Validate and parse login request body using Zod schema",
+      "inputs": [
+        {
+          "name": "body",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Raw request body (untrusted JSON)",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "ValidationError",
+          "condition": "body does not match LoginRequest schema (missing fields, wrong types, failed validators)",
+          "error_type": "InvalidInput",
+          "error_data": {
+            "zodErrors": "Zod validation error details"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, result.value conforms to LoginRequest schema"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "validateUser",
+      "description": "Validate and parse database User record using Zod schema",
+      "inputs": [
+        {
+          "name": "row",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Raw database row (untrusted)",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "ValidationError",
+          "condition": "row does not match User schema",
+          "error_type": "InvalidInput",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, result.value conforms to User schema"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "validateTask",
+      "description": "Validate and parse database Task record using Zod schema",
+      "inputs": [
+        {
+          "name": "row",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Raw database row (untrusted)",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "ValidationError",
+          "condition": "row does not match Task schema",
+          "error_type": "InvalidInput",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, result.value conforms to Task schema"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "validateProject",
+      "description": "Validate and parse database Project record using Zod schema",
+      "inputs": [
+        {
+          "name": "row",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Raw database row (untrusted)",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "ValidationError",
+          "condition": "row does not match Project schema",
+          "error_type": "InvalidInput",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, result.value conforms to Project schema"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createSession",
+      "description": "Create encrypted session cookie using iron-session. Sets HttpOnly, Secure (in production), SameSite=Lax cookie.",
+      "inputs": [
+        {
+          "name": "userId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "User ID to store in session",
+          "validators": []
+        },
+        {
+          "name": "response",
+          "type_ref": "NextResponse",
+          "required": true,
+          "default": "",
+          "description": "Next.js response object to set cookie on",
+          "validators": []
+        }
+      ],
+      "output_type": "NextResponse",
+      "error_cases": [
+        {
+          "name": "SessionEncryptionError",
+          "condition": "Cannot encrypt session data with iron-session",
+          "error_type": "AuthError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "userId is non-empty"
+      ],
+      "postconditions": [
+        "Session cookie is set on response",
+        "Session expires in 7 days"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "response.headers",
+          "description": "Sets Set-Cookie header with encrypted session"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "getSession",
+      "description": "Decrypt and validate session cookie using iron-session",
+      "inputs": [
+        {
+          "name": "request",
+          "type_ref": "NextRequest",
+          "required": true,
+          "default": "",
+          "description": "Next.js request object with cookies",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "NoSessionCookie",
+          "condition": "Request does not contain session cookie",
+          "error_type": "AuthError",
+          "error_data": {}
+        },
+        {
+          "name": "SessionDecryptionError",
+          "condition": "Cannot decrypt session cookie (tampered or wrong key)",
+          "error_type": "AuthError",
+          "error_data": {}
+        },
+        {
+          "name": "SessionExpired",
+          "condition": "Session expiresAt is in the past",
+          "error_type": "AuthError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, result.value is SessionData with valid expiresAt > now"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "destroySession",
+      "description": "Clear session cookie by setting expired cookie",
+      "inputs": [
+        {
+          "name": "response",
+          "type_ref": "NextResponse",
+          "required": true,
+          "default": "",
+          "description": "Next.js response object to clear cookie on",
+          "validators": []
+        }
+      ],
+      "output_type": "NextResponse",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Session cookie is cleared (Max-Age=0)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "response.headers",
+          "description": "Sets Set-Cookie header to expire session"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "authMiddleware",
+      "description": "Next.js middleware function that validates session on all protected routes. Redirects to /login if session is invalid or missing.",
+      "inputs": [
+        {
+          "name": "request",
+          "type_ref": "NextRequest",
+          "required": true,
+          "default": "",
+          "description": "Incoming request",
+          "validators": []
+        }
+      ],
+      "output_type": "NextResponse",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "If session valid, request proceeds",
+        "If session invalid, redirects to /login",
+        "/login and /api/auth/* are always allowed"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "getSession",
+          "description": "Calls getSession to validate session cookie"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "handleLogin",
+      "description": "POST /api/auth/login route handler. Validates credentials, creates session, returns LoginResponse.",
+      "inputs": [
+        {
+          "name": "request",
+          "type_ref": "NextRequest",
+          "required": true,
+          "default": "",
+          "description": "POST request with LoginRequest body",
+          "validators": []
+        }
+      ],
+      "output_type": "NextResponse",
+      "error_cases": [
+        {
+          "name": "InvalidCredentials",
+          "condition": "Username or password does not match database record",
+          "error_type": "AuthError",
+          "error_data": {}
+        },
+        {
+          "name": "MalformedRequest",
+          "condition": "Request body does not match LoginRequest schema",
+          "error_type": "InvalidInput",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "request.method is POST",
+        "request.body is valid JSON"
+      ],
+      "postconditions": [
+        "On success, returns 200 with LoginResponse and session cookie",
+        "On failure, returns 401 with ApiError"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "database query",
+          "description": "Queries users table to validate credentials"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "response session cookie",
+          "description": "Creates session cookie on successful login"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "handleLogout",
+      "description": "POST /api/auth/logout route handler. Destroys session, returns LogoutResponse.",
+      "inputs": [
+        {
+          "name": "request",
+          "type_ref": "NextRequest",
+          "required": true,
+          "default": "",
+          "description": "POST request (session validated by middleware)",
+          "validators": []
+        }
+      ],
+      "output_type": "NextResponse",
+      "error_cases": [],
+      "preconditions": [
+        "request has valid session (enforced by middleware)"
+      ],
+      "postconditions": [
+        "Session cookie is cleared",
+        "Returns 200 with LogoutResponse"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "response session cookie",
+          "description": "Clears session cookie"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "RootErrorBoundary",
+      "description": "React error boundary component for app-level error handling. Renders user-friendly error UI with reset button.",
+      "inputs": [
+        {
+          "name": "props",
+          "type_ref": "ErrorBoundaryProps",
+          "required": true,
+          "default": "",
+          "description": "Error boundary props from Next.js",
+          "validators": []
+        }
+      ],
+      "output_type": "any",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Renders error UI with error message and reset button"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "logging",
+          "target": "console.error",
+          "description": "Logs error details to console"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "PageErrorBoundary",
+      "description": "React error boundary component for page-level error handling. Similar to RootErrorBoundary but with page-specific styling.",
+      "inputs": [
+        {
+          "name": "props",
+          "type_ref": "ErrorBoundaryProps",
+          "required": true,
+          "default": "",
+          "description": "Error boundary props from Next.js",
+          "validators": []
+        }
+      ],
+      "output_type": "any",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Renders error UI with error message and reset button"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "logging",
+          "target": "console.error",
+          "description": "Logs error details to console"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "toApiError",
+      "description": "Convert DomainError to ApiError response structure",
+      "inputs": [
+        {
+          "name": "error",
+          "type_ref": "DomainError",
+          "required": true,
+          "default": "",
+          "description": "Domain error to convert",
+          "validators": []
+        }
+      ],
+      "output_type": "ApiError",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "ApiError.status is appropriate HTTP status code for error.code",
+        "ApiError.error is error.code",
+        "ApiError.message is error.message"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "serializeDate",
+      "description": "Convert Date object to ISO 8601 string for API responses (ensures no Date objects leak to JSON)",
+      "inputs": [
+        {
+          "name": "date",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Date object or ISO string",
+          "validators": []
+        }
+      ],
+      "output_type": "str",
+      "error_cases": [
+        {
+          "name": "InvalidDate",
+          "condition": "Input is not a valid Date or ISO string",
+          "error_type": "InvalidInput",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "Return value is ISO 8601 string"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    }
+  ],
+  "dependencies": [],
+  "dependency_contracts": {},
+  "invariants": [
+    "All database connections use WAL mode",
+    "All database tables use STRICT mode",
+    "Migrations are applied exactly once per version",
+    "Session cookies are HttpOnly and Secure in production",
+    "All API responses use ApiError shape for errors",
+    "No Date objects in API responses (all dates are ISO 8601 strings)",
+    "tsconfig strict mode is enabled with noUncheckedIndexedAccess",
+    "All external inputs are validated with Zod before use",
+    "All data access functions return Result<T, DomainError>",
+    "Database queries wrap raw results with Zod validation"
+  ],
+  "requires": [
+    "Node.js 18+ runtime",
+    "pnpm package manager",
+    "better-sqlite3 native module compilation support",
+    "Writable filesystem for database file and migrations",
+    "Environment variable SESSION_SECRET (32+ byte random string) for iron-session"
+  ],
+  "processing_register": "pragmatic-implementation"
+}

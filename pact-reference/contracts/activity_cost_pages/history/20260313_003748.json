@@ -1,0 +1,2034 @@
+{
+  "component_id": "activity_cost_pages",
+  "name": "Activity Feed & Cost Tracking Pages",
+  "description": "Activity feed full page: chronological event list auto-updating via SSE (useEventSource hook), filterable by agent/project/event type. Cost & Token dashboard page: per-project and per-agent cost breakdown bar charts, token usage over time line charts (recharts), budget alert configuration stored in SQLite. Gracefully shows 'no data available' placeholder UI when token/cost data is missing from filesystem. Overview/home dashboard page that aggregates: agent count + status summary cards, active projects count, PACT health snapshot, last 10 activity events, cost burn rate.",
+  "version": 1,
+  "types": [
+    {
+      "name": "ActivityEventType",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "agent_started",
+        "agent_stopped",
+        "agent_error",
+        "task_created",
+        "task_completed",
+        "pact_proposal",
+        "pact_decision",
+        "cost_threshold_exceeded"
+      ],
+      "inner_types": [],
+      "description": "Discriminant values for the ActivityEvent discriminated union. Each variant maps to one event source."
+    },
+    {
+      "name": "ActivityEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique event identifier (UUID v4)",
+          "validators": []
+        },
+        {
+          "name": "type",
+          "type_ref": "ActivityEventType",
+          "required": true,
+          "default": "",
+          "description": "Discriminant: determines the shape/semantics of the payload",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 datetime string (UTC). Parsed to Date in domain layer.",
+          "validators": []
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "OptionalStr",
+          "required": true,
+          "default": "",
+          "description": "Agent that produced or is subject of this event. Null if not agent-scoped.",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "OptionalStr",
+          "required": true,
+          "default": "",
+          "description": "Project context. Null if not project-scoped.",
+          "validators": []
+        },
+        {
+          "name": "summary",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable one-line summary of the event",
+          "validators": []
+        },
+        {
+          "name": "payload",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Variant-specific structured data. Keys/values depend on 'type' discriminant.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single activity event in the feed. Uses 'type' as the discriminant field for the discriminated union. All events share common fields; variant-specific payload is in 'payload' as a typed dict."
+    },
+    {
+      "name": "OptionalStr",
+      "kind": "optional",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "str"
+      ],
+      "description": "Explicit nullable string — null means 'not applicable', not 'unknown'."
+    },
+    {
+      "name": "OptionalInt",
+      "kind": "optional",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "int"
+      ],
+      "description": "Explicit nullable integer — null means 'no data available'."
+    },
+    {
+      "name": "OptionalFloat",
+      "kind": "optional",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "float"
+      ],
+      "description": "Explicit nullable float — null means 'no data available'."
+    },
+    {
+      "name": "ActivityFilter",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent_id",
+          "type_ref": "OptionalStr",
+          "required": false,
+          "default": "null",
+          "description": "Filter to events involving this agent",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "OptionalStr",
+          "required": false,
+          "default": "null",
+          "description": "Filter to events in this project",
+          "validators": []
+        },
+        {
+          "name": "event_types",
+          "type_ref": "ActivityEventTypeList",
+          "required": false,
+          "default": "[]",
+          "description": "Filter to these event types. Empty list = all types.",
+          "validators": []
+        },
+        {
+          "name": "cursor",
+          "type_ref": "OptionalStr",
+          "required": false,
+          "default": "null",
+          "description": "Cursor for pagination — opaque string (event ID of last seen item)",
+          "validators": []
+        },
+        {
+          "name": "limit",
+          "type_ref": "int",
+          "required": false,
+          "default": "50",
+          "description": "Max events to return per page. Clamped to [1, 50].",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1 <= value <= 50",
+              "error_message": "Limit must be between 1 and 50"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Filter criteria for the activity feed. All fields optional — omitted fields mean 'no filter on this dimension'. Stored in URL searchParams for shareability."
+    },
+    {
+      "name": "ActivityEventTypeList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "ActivityEventType",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of activity event type filters"
+    },
+    {
+      "name": "ActivityEventList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "ActivityEvent",
+      "variants": [],
+      "inner_types": [],
+      "description": "Ordered list of activity events (chronological descending)"
+    },
+    {
+      "name": "CostGranularity",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "hourly",
+        "daily",
+        "weekly",
+        "monthly"
+      ],
+      "inner_types": [],
+      "description": "Time granularity for aggregating cost and token time-series data"
+    },
+    {
+      "name": "CostScope",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "project",
+        "agent"
+      ],
+      "inner_types": [],
+      "description": "Dimension to group cost breakdown by"
+    },
+    {
+      "name": "CostSummary",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "entity_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project ID or Agent ID depending on scope",
+          "validators": []
+        },
+        {
+          "name": "entity_name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable name of the project or agent",
+          "validators": []
+        },
+        {
+          "name": "scope",
+          "type_ref": "CostScope",
+          "required": true,
+          "default": "",
+          "description": "Whether this summary is for a project or an agent",
+          "validators": []
+        },
+        {
+          "name": "total_cost_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total cost in integer cents (USD). 0 if no data.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Cost cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "total_input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total input/prompt tokens consumed. 0 if no data.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "total_output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total output/completion tokens consumed. 0 if no data.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "period_start",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 start of the reporting period",
+          "validators": []
+        },
+        {
+          "name": "period_end",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 end of the reporting period",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Aggregated cost breakdown for a single entity (project or agent). Monetary values in integer cents to avoid floating-point issues."
+    },
+    {
+      "name": "CostSummaryList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "CostSummary",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of cost summaries for bar chart rendering"
+    },
+    {
+      "name": "CostDataPoint",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 datetime for this bucket's start",
+          "validators": []
+        },
+        {
+          "name": "cost_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Aggregated cost in cents for this time bucket",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Cost cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "entity_id",
+          "type_ref": "OptionalStr",
+          "required": true,
+          "default": "",
+          "description": "Entity ID if series is per-entity; null for global aggregate",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single data point in a cost time-series. Pre-shaped for recharts line/bar chart consumption."
+    },
+    {
+      "name": "CostDataPointList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "CostDataPoint",
+      "variants": [],
+      "inner_types": [],
+      "description": "Time-ordered list of cost data points for recharts line chart"
+    },
+    {
+      "name": "TokenUsageDataPoint",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 datetime for this bucket's start",
+          "validators": []
+        },
+        {
+          "name": "input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Prompt tokens consumed in this time bucket",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Completion tokens consumed in this time bucket",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "entity_id",
+          "type_ref": "OptionalStr",
+          "required": true,
+          "default": "",
+          "description": "Entity ID if per-entity; null for global aggregate",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single data point in a token usage time-series. Pre-shaped for recharts."
+    },
+    {
+      "name": "TokenUsageDataPointList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "TokenUsageDataPoint",
+      "variants": [],
+      "inner_types": [],
+      "description": "Time-ordered list of token usage data points for recharts line chart"
+    },
+    {
+      "name": "BudgetAlertScope",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "project",
+        "agent"
+      ],
+      "inner_types": [],
+      "description": "Whether a budget alert applies to a project or an agent"
+    },
+    {
+      "name": "BudgetAlertPeriod",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "daily",
+        "weekly",
+        "monthly"
+      ],
+      "inner_types": [],
+      "description": "Rolling period over which the budget threshold is evaluated"
+    },
+    {
+      "name": "BudgetAlert",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique alert ID (UUID v4). Auto-generated on create.",
+          "validators": []
+        },
+        {
+          "name": "scope",
+          "type_ref": "BudgetAlertScope",
+          "required": true,
+          "default": "",
+          "description": "Whether this alert watches a project or agent",
+          "validators": []
+        },
+        {
+          "name": "entity_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "The project_id or agent_id this alert is scoped to",
+          "validators": []
+        },
+        {
+          "name": "entity_name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable name for display",
+          "validators": []
+        },
+        {
+          "name": "period",
+          "type_ref": "BudgetAlertPeriod",
+          "required": true,
+          "default": "",
+          "description": "Rolling period for threshold evaluation",
+          "validators": []
+        },
+        {
+          "name": "threshold_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Budget threshold in integer cents (USD). Alert fires when spending exceeds this.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value > 0",
+              "error_message": "Threshold must be a positive integer in cents"
+            }
+          ]
+        },
+        {
+          "name": "enabled",
+          "type_ref": "bool",
+          "required": true,
+          "default": "true",
+          "description": "Whether this alert is currently active",
+          "validators": []
+        },
+        {
+          "name": "created_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 creation timestamp",
+          "validators": []
+        },
+        {
+          "name": "updated_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 last-updated timestamp",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A configured budget alert. Stored in SQLite. When spending for the given entity in the given period exceeds threshold_cents, a cost_threshold_exceeded event is emitted."
+    },
+    {
+      "name": "BudgetAlertList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "BudgetAlert",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of all configured budget alerts"
+    },
+    {
+      "name": "BudgetAlertCreateInput",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "scope",
+          "type_ref": "BudgetAlertScope",
+          "required": true,
+          "default": "",
+          "description": "project or agent",
+          "validators": []
+        },
+        {
+          "name": "entity_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "The project_id or agent_id to watch",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "len >= 1",
+              "error_message": "entity_id must not be empty"
+            }
+          ]
+        },
+        {
+          "name": "entity_name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Display name for the entity",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "len >= 1",
+              "error_message": "entity_name must not be empty"
+            }
+          ]
+        },
+        {
+          "name": "period",
+          "type_ref": "BudgetAlertPeriod",
+          "required": true,
+          "default": "",
+          "description": "daily, weekly, or monthly",
+          "validators": []
+        },
+        {
+          "name": "threshold_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Budget threshold in integer cents",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value > 0",
+              "error_message": "Threshold must be a positive integer in cents"
+            }
+          ]
+        },
+        {
+          "name": "enabled",
+          "type_ref": "bool",
+          "required": false,
+          "default": "true",
+          "description": "Initial enabled state",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Zod-validated input for creating a new budget alert. id/created_at/updated_at are auto-generated."
+    },
+    {
+      "name": "BudgetAlertUpdateInput",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "period",
+          "type_ref": "BudgetAlertPeriod",
+          "required": false,
+          "default": "",
+          "description": "New period",
+          "validators": []
+        },
+        {
+          "name": "threshold_cents",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "New threshold in cents",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value > 0",
+              "error_message": "Threshold must be a positive integer in cents"
+            }
+          ]
+        },
+        {
+          "name": "enabled",
+          "type_ref": "bool",
+          "required": false,
+          "default": "",
+          "description": "Enable or disable the alert",
+          "validators": []
+        },
+        {
+          "name": "entity_name",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Updated display name",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "len >= 1",
+              "error_message": "entity_name must not be empty"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Zod-validated input for updating an existing budget alert. All fields optional — only provided fields are updated."
+    },
+    {
+      "name": "AgentStatusKind",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "active",
+        "idle",
+        "error",
+        "offline"
+      ],
+      "inner_types": [],
+      "description": "Possible agent statuses for overview cards"
+    },
+    {
+      "name": "AgentStatusCount",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "status",
+          "type_ref": "AgentStatusKind",
+          "required": true,
+          "default": "",
+          "description": "The status being counted",
+          "validators": []
+        },
+        {
+          "name": "count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of agents in this status",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Count cannot be negative"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Count of agents in a given status for the overview summary cards"
+    },
+    {
+      "name": "AgentStatusCountList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "AgentStatusCount",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of agent counts per status"
+    },
+    {
+      "name": "PactHealthSnapshot",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "pending_proposals",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of proposals awaiting decision",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "approved_today",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Proposals approved in the current UTC day",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "rejected_today",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Proposals rejected in the current UTC day",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "last_activity",
+          "type_ref": "OptionalStr",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp of most recent PACT activity. Null if no activity recorded.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Summary of PACT system health for the overview dashboard widget"
+    },
+    {
+      "name": "CostBurnRate",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "last_24h_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total spend in the last 24 hours in cents",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Cost cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "last_7d_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total spend in the last 7 days in cents",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Cost cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "trend_direction",
+          "type_ref": "TrendDirection",
+          "required": true,
+          "default": "",
+          "description": "Whether cost is increasing, decreasing, or stable compared to prior period",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Current cost burn rate for the overview dashboard"
+    },
+    {
+      "name": "TrendDirection",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "increasing",
+        "decreasing",
+        "stable"
+      ],
+      "inner_types": [],
+      "description": "Direction indicator for cost burn rate trend"
+    },
+    {
+      "name": "OverviewData",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent_statuses",
+          "type_ref": "OverviewAgentStatuses",
+          "required": true,
+          "default": "",
+          "description": "Agent status summary. Null if agent data unavailable.",
+          "validators": []
+        },
+        {
+          "name": "active_project_count",
+          "type_ref": "OptionalInt",
+          "required": true,
+          "default": "",
+          "description": "Number of active projects. Null if project data unavailable.",
+          "validators": []
+        },
+        {
+          "name": "pact_health",
+          "type_ref": "OverviewPactHealth",
+          "required": true,
+          "default": "",
+          "description": "PACT health snapshot. Null if PACT data unavailable.",
+          "validators": []
+        },
+        {
+          "name": "recent_events",
+          "type_ref": "OverviewRecentEvents",
+          "required": true,
+          "default": "",
+          "description": "Last 10 activity events. Null if event data unavailable.",
+          "validators": []
+        },
+        {
+          "name": "cost_burn_rate",
+          "type_ref": "OverviewCostBurnRate",
+          "required": true,
+          "default": "",
+          "description": "Cost burn rate summary. Null if cost data unavailable.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Aggregated data for the overview/home dashboard page. Each section is independently nullable so widgets can render their own error/empty states when fetched via Promise.allSettled."
+    },
+    {
+      "name": "OverviewAgentStatuses",
+      "kind": "optional",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "AgentStatusCountList"
+      ],
+      "description": "Nullable wrapper for agent status counts in overview"
+    },
+    {
+      "name": "OverviewPactHealth",
+      "kind": "optional",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "PactHealthSnapshot"
+      ],
+      "description": "Nullable wrapper for PACT health snapshot in overview"
+    },
+    {
+      "name": "OverviewRecentEvents",
+      "kind": "optional",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "ActivityEventList"
+      ],
+      "description": "Nullable wrapper for recent events list in overview"
+    },
+    {
+      "name": "OverviewCostBurnRate",
+      "kind": "optional",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "CostBurnRate"
+      ],
+      "description": "Nullable wrapper for cost burn rate in overview"
+    },
+    {
+      "name": "ApiSingleResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "data",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "The response payload. Null if resource not found or error occurred. Actual type is contextual per endpoint.",
+          "validators": []
+        },
+        {
+          "name": "error",
+          "type_ref": "OptionalStr",
+          "required": false,
+          "default": "null",
+          "description": "Error message if the request failed. Null on success.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Consistent API response envelope for single-resource endpoints: { data: T | null, error?: string }"
+    },
+    {
+      "name": "ApiCollectionResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "data",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Array of items. Empty array if no results. Actual item type is contextual per endpoint.",
+          "validators": []
+        },
+        {
+          "name": "cursor",
+          "type_ref": "OptionalStr",
+          "required": false,
+          "default": "null",
+          "description": "Opaque cursor for next page. Null if no more pages.",
+          "validators": []
+        },
+        {
+          "name": "error",
+          "type_ref": "OptionalStr",
+          "required": false,
+          "default": "null",
+          "description": "Error message if the request failed. Null on success.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Consistent API response envelope for collection endpoints: { data: T[], cursor?: string }"
+    },
+    {
+      "name": "SSEEventPayload",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "event_type",
+          "type_ref": "ActivityEventType",
+          "required": true,
+          "default": "",
+          "description": "Maps to SSE event: field for client-side addEventListener",
+          "validators": []
+        },
+        {
+          "name": "payload",
+          "type_ref": "ActivityEvent",
+          "required": true,
+          "default": "",
+          "description": "Full event object serialized as JSON in SSE data: field",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Structure of SSE push events. The SSE 'event:' field = type discriminant; 'data:' field = JSON serialized ActivityEvent."
+    },
+    {
+      "name": "RealtimeBuffer",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "events",
+          "type_ref": "ActivityEventList",
+          "required": true,
+          "default": "",
+          "description": "Buffered events, newest first",
+          "validators": []
+        },
+        {
+          "name": "capacity",
+          "type_ref": "int",
+          "required": true,
+          "default": "500",
+          "description": "Maximum number of events to hold in buffer",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value > 0 && value <= 1000",
+              "error_message": "Buffer capacity must be between 1 and 1000"
+            }
+          ]
+        },
+        {
+          "name": "overflow_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "0",
+          "description": "Number of events dropped due to buffer overflow since last drain",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "value >= 0",
+              "error_message": "Overflow count cannot be negative"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Bounded in-memory buffer for real-time events held between SSE pushes. Max 500 events."
+    }
+  ],
+  "functions": [
+    {
+      "name": "getActivityEvents",
+      "description": "Retrieves a paginated, filtered list of activity events from the filesystem data layer. Returns events in reverse chronological order. Uses cursor-based pagination. Never throws for missing/malformed data — returns empty array.",
+      "inputs": [
+        {
+          "name": "filter",
+          "type_ref": "ActivityFilter",
+          "required": true,
+          "default": "",
+          "description": "Filter and pagination criteria. All fields optional with sensible defaults.",
+          "validators": []
+        }
+      ],
+      "output_type": "ApiCollectionResponse",
+      "error_cases": [
+        {
+          "name": "invalid_filter",
+          "condition": "Zod validation of filter params fails",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "filesystem_read_failure",
+          "condition": "Unexpected I/O error reading event source files (not missing files — those return empty)",
+          "error_type": "InternalError",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "filter.limit is clamped to [1, 50] before query execution",
+        "If filter.cursor is provided, it must reference a valid event ID or is silently ignored (returns from beginning)"
+      ],
+      "postconditions": [
+        "Returned data array length <= filter.limit",
+        "Events are sorted by timestamp descending (newest first)",
+        "If data array length < filter.limit, cursor in response is null (no more pages)",
+        "All events in response match the provided filter criteria",
+        "Empty array returned (not error) when no events match filters"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw/PACT event directories on filesystem",
+          "description": "Reads agent session logs, PACT state files to assemble activity events"
+        },
+        {
+          "kind": "logging",
+          "target": "application logger",
+          "description": "Logs parse failures for malformed event files at warn level"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n = total events matching filter, capped by pagination"
+      }
+    },
+    {
+      "name": "getCostSummary",
+      "description": "Retrieves per-entity cost breakdown data for bar chart rendering. Groups costs by project or agent over a specified date range. Returns pre-aggregated CostSummary items shaped for recharts BarChart.",
+      "inputs": [
+        {
+          "name": "scope",
+          "type_ref": "CostScope",
+          "required": true,
+          "default": "",
+          "description": "Group by 'project' or 'agent'",
+          "validators": []
+        },
+        {
+          "name": "period_start",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 start of reporting period",
+          "validators": []
+        },
+        {
+          "name": "period_end",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 end of reporting period",
+          "validators": []
+        }
+      ],
+      "output_type": "ApiSingleResponse",
+      "error_cases": [
+        {
+          "name": "invalid_date_range",
+          "condition": "period_start > period_end or dates are not valid ISO 8601",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "invalid_scope",
+          "condition": "scope is not 'project' or 'agent'",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "filesystem_read_failure",
+          "condition": "Unexpected I/O error reading cost data files",
+          "error_type": "InternalError",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "period_start is a valid ISO 8601 datetime string",
+        "period_end is a valid ISO 8601 datetime string",
+        "period_start <= period_end",
+        "scope is one of 'project' | 'agent'"
+      ],
+      "postconditions": [
+        "data field contains CostSummaryList (possibly empty) on success",
+        "Each CostSummary has total_cost_cents >= 0",
+        "All monetary values are in integer cents (no floating point)",
+        "Returns empty list (not null data, not error) when no cost data exists for the period",
+        "Summaries are sorted by total_cost_cents descending (highest cost first)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw session cost data on filesystem",
+          "description": "Reads token/cost logs from agent session directories"
+        },
+        {
+          "kind": "logging",
+          "target": "application logger",
+          "description": "Logs parse failures for malformed cost files at warn level"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 300,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n = number of session files in period"
+      }
+    },
+    {
+      "name": "getCostTimeSeries",
+      "description": "Retrieves time-bucketed cost data for line chart rendering. Pre-aggregates cost data at the specified granularity. Returns data shaped for recharts LineChart / AreaChart.",
+      "inputs": [
+        {
+          "name": "granularity",
+          "type_ref": "CostGranularity",
+          "required": true,
+          "default": "",
+          "description": "Time bucket size: hourly, daily, weekly, monthly. Defaults to 'daily'.",
+          "validators": []
+        },
+        {
+          "name": "period_start",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 start of reporting period",
+          "validators": []
+        },
+        {
+          "name": "period_end",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 end of reporting period",
+          "validators": []
+        },
+        {
+          "name": "entity_id",
+          "type_ref": "OptionalStr",
+          "required": false,
+          "default": "null",
+          "description": "Filter to specific project/agent. Null for global aggregate.",
+          "validators": []
+        }
+      ],
+      "output_type": "ApiSingleResponse",
+      "error_cases": [
+        {
+          "name": "invalid_date_range",
+          "condition": "period_start > period_end or dates are not valid ISO 8601",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "invalid_granularity",
+          "condition": "granularity is not a valid CostGranularity value",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "entity_not_found",
+          "condition": "entity_id provided but does not match any known project or agent",
+          "error_type": "NotFoundError",
+          "error_data": {
+            "http_status": "404"
+          }
+        },
+        {
+          "name": "excessive_range",
+          "condition": "Date range at given granularity would produce > 1000 data points",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "filesystem_read_failure",
+          "condition": "Unexpected I/O error reading cost data files",
+          "error_type": "InternalError",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "period_start is a valid ISO 8601 datetime string",
+        "period_end is a valid ISO 8601 datetime string",
+        "period_start <= period_end",
+        "granularity is one of 'hourly' | 'daily' | 'weekly' | 'monthly'"
+      ],
+      "postconditions": [
+        "data field contains CostDataPointList (possibly empty) on success",
+        "Data points are sorted by timestamp ascending (chronological order for charts)",
+        "Each data point's timestamp aligns to the granularity bucket boundary",
+        "Empty time buckets within the range are included with cost_cents = 0 (no gaps in series)",
+        "Returns empty list when no cost data exists"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw session cost data on filesystem",
+          "description": "Reads token/cost logs for time-series aggregation"
+        },
+        {
+          "kind": "logging",
+          "target": "application logger",
+          "description": "Logs parse failures at warn level"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 500,
+        "max_memory_mb": 64,
+        "complexity": "O(n + b) where n = session files, b = output buckets"
+      }
+    },
+    {
+      "name": "getTokenUsageTimeSeries",
+      "description": "Retrieves time-bucketed token usage data (input + output tokens) for line chart rendering. Pre-aggregates at specified granularity. Returns data shaped for recharts with separate input/output series.",
+      "inputs": [
+        {
+          "name": "granularity",
+          "type_ref": "CostGranularity",
+          "required": true,
+          "default": "",
+          "description": "Time bucket size. Defaults to 'daily'.",
+          "validators": []
+        },
+        {
+          "name": "period_start",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 start of reporting period",
+          "validators": []
+        },
+        {
+          "name": "period_end",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 end of reporting period",
+          "validators": []
+        },
+        {
+          "name": "entity_id",
+          "type_ref": "OptionalStr",
+          "required": false,
+          "default": "null",
+          "description": "Filter to specific project/agent. Null for global aggregate.",
+          "validators": []
+        }
+      ],
+      "output_type": "ApiSingleResponse",
+      "error_cases": [
+        {
+          "name": "invalid_date_range",
+          "condition": "period_start > period_end or invalid ISO 8601",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "invalid_granularity",
+          "condition": "granularity not a valid CostGranularity value",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "entity_not_found",
+          "condition": "entity_id provided but not found",
+          "error_type": "NotFoundError",
+          "error_data": {
+            "http_status": "404"
+          }
+        },
+        {
+          "name": "excessive_range",
+          "condition": "Range would produce > 1000 data points",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "filesystem_read_failure",
+          "condition": "Unexpected I/O error",
+          "error_type": "InternalError",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "period_start is a valid ISO 8601 datetime string",
+        "period_end is a valid ISO 8601 datetime string",
+        "period_start <= period_end",
+        "granularity is one of 'hourly' | 'daily' | 'weekly' | 'monthly'"
+      ],
+      "postconditions": [
+        "data field contains TokenUsageDataPointList (possibly empty) on success",
+        "Data points sorted by timestamp ascending",
+        "Empty time buckets included with input_tokens = 0 and output_tokens = 0",
+        "Token counts are non-negative integers",
+        "Returns empty list when no token data exists"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw session token usage data on filesystem",
+          "description": "Reads token usage logs for time-series aggregation"
+        },
+        {
+          "kind": "logging",
+          "target": "application logger",
+          "description": "Logs parse failures at warn level"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 500,
+        "max_memory_mb": 64,
+        "complexity": "O(n + b) where n = session files, b = output buckets"
+      }
+    },
+    {
+      "name": "getOverviewData",
+      "description": "Fetches all overview dashboard sections via Promise.allSettled pattern. Each section is independently nullable so individual widget failures don't break the entire page. Returns OverviewData with per-section null for unavailable data.",
+      "inputs": [],
+      "output_type": "ApiSingleResponse",
+      "error_cases": [
+        {
+          "name": "total_failure",
+          "condition": "All data sources simultaneously fail (extremely rare)",
+          "error_type": "InternalError",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "data field contains OverviewData (never null at top level)",
+        "Each sub-field in OverviewData is independently null or populated",
+        "If a section's data source fails, that field is null and no error is thrown",
+        "recent_events contains at most 10 events",
+        "agent_statuses covers all AgentStatusKind variants (count may be 0)",
+        "cost_burn_rate.last_24h_cents and last_7d_cents are non-negative"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw agent configs, session data, PACT state files",
+          "description": "Reads multiple filesystem sources to assemble overview"
+        },
+        {
+          "kind": "logging",
+          "target": "application logger",
+          "description": "Logs individual section failures at warn level for debugging"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 800,
+        "max_memory_mb": 128,
+        "complexity": "O(a + p + e + c) where a=agents, p=PACT proposals, e=recent events, c=cost records"
+      }
+    },
+    {
+      "name": "createBudgetAlert",
+      "description": "Creates a new budget alert in SQLite. Validates input with Zod, generates UUID and timestamps, inserts into budget_alerts table. Returns the created BudgetAlert.",
+      "inputs": [
+        {
+          "name": "input",
+          "type_ref": "BudgetAlertCreateInput",
+          "required": true,
+          "default": "",
+          "description": "Zod-validated creation payload",
+          "validators": []
+        }
+      ],
+      "output_type": "ApiSingleResponse",
+      "error_cases": [
+        {
+          "name": "validation_error",
+          "condition": "Input fails Zod schema validation (missing fields, invalid types, threshold <= 0)",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "duplicate_alert",
+          "condition": "An alert with the same scope + entity_id + period combination already exists",
+          "error_type": "ConflictError",
+          "error_data": {
+            "http_status": "409"
+          }
+        },
+        {
+          "name": "entity_not_found",
+          "condition": "entity_id does not reference a known project or agent",
+          "error_type": "NotFoundError",
+          "error_data": {
+            "http_status": "404"
+          }
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite write operation fails unexpectedly",
+          "error_type": "InternalError",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "input passes Zod schema validation",
+        "input.threshold_cents > 0",
+        "input.entity_id is non-empty",
+        "SQLite database is initialized with budget_alerts table"
+      ],
+      "postconditions": [
+        "data field contains the created BudgetAlert with generated id, created_at, updated_at",
+        "BudgetAlert.id is a valid UUID v4",
+        "BudgetAlert.created_at == BudgetAlert.updated_at (new record)",
+        "Record is persisted in SQLite and retrievable by id",
+        "If enabled, alert is immediately active for threshold evaluation"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite budget_alerts table",
+          "description": "Inserts a new row into the budget_alerts table"
+        },
+        {
+          "kind": "logging",
+          "target": "application logger",
+          "description": "Logs alert creation at info level"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "updateBudgetAlert",
+      "description": "Updates an existing budget alert in SQLite. Only provided fields in the update input are modified. Updates the updated_at timestamp.",
+      "inputs": [
+        {
+          "name": "alert_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID of the budget alert to update",
+          "validators": []
+        },
+        {
+          "name": "input",
+          "type_ref": "BudgetAlertUpdateInput",
+          "required": true,
+          "default": "",
+          "description": "Partial update payload — only provided fields are changed",
+          "validators": []
+        }
+      ],
+      "output_type": "ApiSingleResponse",
+      "error_cases": [
+        {
+          "name": "not_found",
+          "condition": "No budget alert exists with the given alert_id",
+          "error_type": "NotFoundError",
+          "error_data": {
+            "http_status": "404"
+          }
+        },
+        {
+          "name": "validation_error",
+          "condition": "Update input fails Zod validation",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "empty_update",
+          "condition": "No fields provided in update input",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "duplicate_alert",
+          "condition": "Update would create a duplicate scope + entity_id + period combination",
+          "error_type": "ConflictError",
+          "error_data": {
+            "http_status": "409"
+          }
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite write operation fails unexpectedly",
+          "error_type": "InternalError",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "alert_id is a valid UUID v4 string",
+        "At least one field in input is provided (non-empty update)",
+        "If input.threshold_cents is provided, it must be > 0",
+        "SQLite database is initialized with budget_alerts table"
+      ],
+      "postconditions": [
+        "data field contains the updated BudgetAlert",
+        "BudgetAlert.updated_at is set to current UTC timestamp",
+        "BudgetAlert.created_at is unchanged",
+        "Only fields present in input are modified; other fields retain previous values",
+        "Changes are persisted in SQLite"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite budget_alerts table",
+          "description": "Updates an existing row in the budget_alerts table"
+        },
+        {
+          "kind": "logging",
+          "target": "application logger",
+          "description": "Logs alert update at info level"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "deleteBudgetAlert",
+      "description": "Deletes a budget alert from SQLite by ID. Idempotent — deleting a non-existent alert returns 404 (not an error in the crash sense, but a client error).",
+      "inputs": [
+        {
+          "name": "alert_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID of the budget alert to delete",
+          "validators": []
+        }
+      ],
+      "output_type": "ApiSingleResponse",
+      "error_cases": [
+        {
+          "name": "not_found",
+          "condition": "No budget alert exists with the given alert_id",
+          "error_type": "NotFoundError",
+          "error_data": {
+            "http_status": "404"
+          }
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite delete operation fails unexpectedly",
+          "error_type": "InternalError",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "alert_id is a non-empty string"
+      ],
+      "postconditions": [
+        "data field contains the deleted BudgetAlert (for confirmation UI)",
+        "Record is removed from SQLite budget_alerts table",
+        "Alert is no longer evaluated for threshold breaches",
+        "Subsequent getBudgetAlert(alert_id) returns null"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite budget_alerts table",
+          "description": "Deletes a row from the budget_alerts table"
+        },
+        {
+          "kind": "logging",
+          "target": "application logger",
+          "description": "Logs alert deletion at info level"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "getBudgetAlert",
+      "description": "Retrieves a single budget alert by ID from SQLite. Returns null data if not found.",
+      "inputs": [
+        {
+          "name": "alert_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID of the budget alert to retrieve",
+          "validators": []
+        }
+      ],
+      "output_type": "ApiSingleResponse",
+      "error_cases": [
+        {
+          "name": "database_error",
+          "condition": "SQLite read operation fails unexpectedly",
+          "error_type": "InternalError",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "alert_id is a non-empty string"
+      ],
+      "postconditions": [
+        "data field contains BudgetAlert if found, null if not found",
+        "No error field set when alert simply doesn't exist (data is null)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": "Pure SQLite read — no side effects beyond query execution"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "listBudgetAlerts",
+      "description": "Lists all configured budget alerts from SQLite. Optionally filtered by scope and/or entity_id. Returns empty array if none configured.",
+      "inputs": [
+        {
+          "name": "scope",
+          "type_ref": "BudgetAlertScope",
+          "required": false,
+          "default": "",
+          "description": "Filter by scope type",
+          "validators": []
+        },
+        {
+          "name": "entity_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by specific entity",
+          "validators": []
+        }
+      ],
+      "output_type": "ApiCollectionResponse",
+      "error_cases": [
+        {
+          "name": "invalid_scope",
+          "condition": "scope provided but not a valid BudgetAlertScope value",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite read operation fails unexpectedly",
+          "error_type": "InternalError",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "data field contains BudgetAlertList (possibly empty)",
+        "If scope filter provided, all returned alerts match that scope",
+        "If entity_id filter provided, all returned alerts match that entity_id",
+        "Alerts sorted by created_at descending (newest first)",
+        "cursor is always null (no pagination needed — budget alerts are bounded)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": "Pure SQLite read — no side effects beyond query execution"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "evaluateBudgetAlerts",
+      "description": "Checks all enabled budget alerts against current spending data. For each alert whose threshold is exceeded, emits a cost_threshold_exceeded ActivityEvent via the SSE event bus. Called periodically by the data layer (not directly by API routes).",
+      "inputs": [],
+      "output_type": "BudgetAlertList",
+      "error_cases": [
+        {
+          "name": "database_error",
+          "condition": "SQLite read of alerts fails",
+          "error_type": "InternalError",
+          "error_data": {}
+        },
+        {
+          "name": "sse_publish_failure",
+          "condition": "Failed to publish event to SSE bus (non-fatal — alert still returned in list)",
+          "error_type": "InternalError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "SQLite budget_alerts table is initialized",
+        "Cost data is accessible on filesystem",
+        "SSE event bus is initialized and accepting events"
+      ],
+      "postconditions": [
+        "Returns list of BudgetAlerts that exceeded their threshold in the current evaluation",
+        "For each exceeded alert, a cost_threshold_exceeded ActivityEvent has been published to SSE bus",
+        "Alerts that are not enabled are skipped",
+        "Alerts that were already triggered in the current period are not re-triggered (deduplication)",
+        "No exceptions thrown for missing cost data — those alerts simply don't trigger"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw session cost data on filesystem",
+          "description": "Reads cost data to compare against thresholds"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SSE event bus",
+          "description": "Publishes cost_threshold_exceeded events for exceeded alerts"
+        },
+        {
+          "kind": "logging",
+          "target": "application logger",
+          "description": "Logs threshold evaluations and exceeded alerts at info level"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1000,
+        "max_memory_mb": null,
+        "complexity": "O(a * n) where a = number of enabled alerts, n = cost records per alert period"
+      }
+    },
+    {
+      "name": "subscribeToActivityStream",
+      "description": "Establishes an SSE connection for real-time activity events. Returns a ReadableStream that pushes ActivityEvent payloads. Supports optional filtering by event type, agent, or project via query parameters. Maintains connection with periodic heartbeats.",
+      "inputs": [
+        {
+          "name": "event_types",
+          "type_ref": "ActivityEventTypeList",
+          "required": false,
+          "default": "[]",
+          "description": "Filter to specific event types. Empty = all types.",
+          "validators": []
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "OptionalStr",
+          "required": false,
+          "default": "null",
+          "description": "Filter to events for this agent. Null = all agents.",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "OptionalStr",
+          "required": false,
+          "default": "null",
+          "description": "Filter to events for this project. Null = all projects.",
+          "validators": []
+        }
+      ],
+      "output_type": "str",
+      "error_cases": [
+        {
+          "name": "sse_bus_unavailable",
+          "condition": "SSE event bus is not initialized or crashed",
+          "error_type": "InternalError",
+          "error_data": {
+            "http_status": "503"
+          }
+        },
+        {
+          "name": "invalid_filter",
+          "condition": "Filter parameters fail validation",
+          "error_type": "ValidationError",
+          "error_data": {
+            "http_status": "400"
+          }
+        }
+      ],
+      "preconditions": [
+        "SSE event bus is initialized",
+        "Client supports text/event-stream content type"
+      ],
+      "postconditions": [
+        "Returns text/event-stream response with Content-Type header",
+        "Each SSE message has event: field set to ActivityEventType value",
+        "Each SSE message has data: field containing JSON-serialized ActivityEvent",
+        "Heartbeat comment sent every 30 seconds to keep connection alive",
+        "Connection cleaned up when client disconnects (AbortSignal)",
+        "Only events matching the provided filters are sent to this client"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "SSE event bus subscription",
+          "description": "Subscribes to the shared event bus with optional filters; holds open HTTP connection"
+        },
+        {
+          "kind": "logging",
+          "target": "application logger",
+          "description": "Logs connection open/close events at debug level"
+        }
+      ],
+      "performance_budget": null
+    }
+  ],
+  "dependencies": [
+    "lib_sse",
+    "lib_db",
+    "lib_data",
+    "lib_types",
+    "lib_openclaw",
+    "lib_pact"
+  ],
+  "dependency_contracts": {
+    "lib_sse": [
+      "subscribeToEvents",
+      "publishEvent"
+    ],
+    "lib_db": [
+      "executeSql",
+      "querySql"
+    ],
+    "lib_data": [
+      "readFilesystemData"
+    ],
+    "lib_types": [
+      "SharedTypeDefinitions"
+    ],
+    "lib_openclaw": [
+      "readAgentSessions",
+      "readAgentConfig"
+    ],
+    "lib_pact": [
+      "readPactState",
+      "parsePactFiles"
+    ]
+  },
+  "invariants": [
+    "All monetary values are represented as non-negative integer cents (int >= 0) throughout the entire contract — no floating-point currency",
+    "All token counts are non-negative integers (int >= 0)",
+    "All timestamps are ISO 8601 UTC strings in serialized/API form",
+    "Null explicitly means 'data not available' or 'not applicable'; empty arrays mean 'no results found' — these are semantically distinct",
+    "ActivityEvent.type discriminant fully determines the valid keys in ActivityEvent.payload",
+    "API responses always use the envelope pattern: ApiSingleResponse for single resources, ApiCollectionResponse for lists",
+    "Budget alert uniqueness constraint: no two alerts may share the same (scope, entity_id, period) tuple",
+    "The real-time event buffer never exceeds 500 events; oldest events are evicted when capacity is reached",
+    "All filesystem reads use Zod .safeParse() — parse failures are logged and result in null/empty returns, never exceptions",
+    "Components never read files or query SQLite directly — all access goes through lib/data/ layer functions defined in this contract",
+    "The overview page fetches all sections via Promise.allSettled — each widget independently handles its error/empty state",
+    "Activity feed filter state is stored in URL searchParams for shareability and browser back/forward support",
+    "SSE heartbeat comments are sent every 30 seconds to prevent proxy/load-balancer timeout",
+    "Cost time-series include zero-value buckets for time periods with no activity to prevent chart gaps",
+    "Pagination uses cursor-based approach with opaque cursor strings (event IDs), max 50 items per page"
+  ],
+  "requires": [
+    "lib/sse/ - SSE event bus for real-time push",
+    "lib/db/ - SQLite schema + typed query wrappers for budget alerts",
+    "lib/data/ - Data access layer (filesystem + SQLite) — components never read files or query SQLite directly",
+    "lib/openclaw/ - OpenClaw config/session reader for agent and project data",
+    "lib/pact/ - PACT CLI wrapper + file parser for health snapshots",
+    "recharts - charting library for cost/token visualizations",
+    "zod - input validation for all API params and file parsing",
+    "better-sqlite3 - synchronous SQLite driver"
+  ],
+  "processing_register": "pragmatic-implementation"
+}

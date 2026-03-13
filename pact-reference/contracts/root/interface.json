@@ -1,0 +1,1090 @@
+{
+  "component_id": "root",
+  "name": "Root",
+  "description": "Contract specifications for cross-cutting concerns in OpenClaw Mission Control. Defines pure TypeScript type definitions and protocols (Result, serialization, events, aggregations, errors, naming conventions) that subsystems must conform to. Zero runtime code—purely types and interfaces. No dependencies; all subsystems reference root for conformance contracts.",
+  "version": 1,
+  "types": [
+    {
+      "name": "ErrorKind",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "NotFound",
+        "ValidationError",
+        "ConflictError",
+        "DatabaseError",
+        "FilesystemError",
+        "ParseError",
+        "NetworkError",
+        "PermissionDenied",
+        "Timeout",
+        "UnknownError"
+      ],
+      "inner_types": [],
+      "description": "Standard error categories for all subsystems. Finite set of error types for discriminated error handling."
+    },
+    {
+      "name": "StandardError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type_ref": "ErrorKind",
+          "required": true,
+          "default": "",
+          "description": "Error category discriminant",
+          "validators": []
+        },
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error message",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..10000",
+              "error_message": "Error message must be between 1 and 10000 characters"
+            }
+          ]
+        },
+        {
+          "name": "context",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Additional structured error context (field names, paths, codes, etc.)",
+          "validators": []
+        },
+        {
+          "name": "cause",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Underlying error message or stack trace from source system",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp when error occurred",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+              "error_message": "timestamp must be valid ISO 8601 format"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Standard error interface that all subsystems implement. Enables uniform error handling and reporting across the application."
+    },
+    {
+      "name": "ResultOk",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ok",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Literal true for success variant",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value === true",
+              "error_message": "ok must be true for ResultOk"
+            }
+          ]
+        },
+        {
+          "name": "value",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "The success payload. Actual type depends on function signature (generic T).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Success variant of Result discriminated union"
+    },
+    {
+      "name": "ResultErr",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ok",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Literal false for error variant",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value === false",
+              "error_message": "ok must be false for ResultErr"
+            }
+          ]
+        },
+        {
+          "name": "error",
+          "type_ref": "StandardError",
+          "required": true,
+          "default": "",
+          "description": "The structured error value",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Error variant of Result discriminated union"
+    },
+    {
+      "name": "Result",
+      "kind": "union",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "ResultOk",
+        "ResultErr"
+      ],
+      "description": "Result type protocol for all fallible operations. Discriminated union of ResultOk | ResultErr. All data access functions must return Result<T, StandardError>."
+    },
+    {
+      "name": "ISODateString",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "value",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 formatted timestamp with timezone (YYYY-MM-DDTHH:mm:ss.sssZ or +HH:mm)",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+              "error_message": "Must be valid ISO 8601 timestamp"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "ISO 8601 timestamp string type. All date/time values must use this format (no Date objects across serialization boundaries)."
+    },
+    {
+      "name": "Serializable",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "toJSON",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Signature of toJSON method: () => Record<string, JSONValue>. Implementers must provide this method that returns a JSON-serializable object with no circular references, Functions, or Symbols.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Protocol contract for types that can be serialized to JSON/NDJSON. All SSE event payloads and API responses must implement this contract."
+    },
+    {
+      "name": "Deserializable",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "fromJSON",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Signature of static fromJSON method: (data: Record<string, JSONValue>) => Result<T, StandardError>. Implementers must validate via Zod before constructing instance.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Protocol contract for types that can be deserialized from JSON. All persisted events and API request bodies must implement this contract."
+    },
+    {
+      "name": "EventVersion",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "v1"
+      ],
+      "inner_types": [],
+      "description": "Event schema version discriminator for forward compatibility"
+    },
+    {
+      "name": "EventEnvelope",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique event identifier (UUID v4 or nanoid). Used for SSE Last-Event-ID and deduplication.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-zA-Z0-9_-]{21,}$|^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "error_message": "Must be nanoid (21+ chars) or UUID v4"
+            }
+          ]
+        },
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Dot-notation event type (e.g., 'agent.started', 'pact.transition'). Used for filtering and routing.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-z]+([.][a-z_]+)+$",
+              "error_message": "Must be dot-notation lowercase event type"
+            }
+          ]
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp when event occurred",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+              "error_message": "Must be valid ISO 8601 timestamp"
+            }
+          ]
+        },
+        {
+          "name": "version",
+          "type_ref": "EventVersion",
+          "required": true,
+          "default": "",
+          "description": "Event schema version (always v1 for current schema)",
+          "validators": []
+        },
+        {
+          "name": "payload",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Event-specific data conforming to event type schema. Must be JSON-serializable.",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Optional envelope-level metadata (trace IDs, correlation IDs, source system)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Standard envelope for all SSE and persisted events. Subsystems must wrap event payloads in this envelope. Enables versioning, ordering, and deduplication."
+    },
+    {
+      "name": "TimeBucketGranularity",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "minute",
+        "hour",
+        "day",
+        "week",
+        "month"
+      ],
+      "inner_types": [],
+      "description": "Time bucket granularities for aggregation queries"
+    },
+    {
+      "name": "AggregationDimension",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "agent_id",
+        "project_id",
+        "model",
+        "time_bucket",
+        "status",
+        "priority",
+        "event_type"
+      ],
+      "inner_types": [],
+      "description": "Standard dimensions for grouping aggregations (cost, metrics, activity)"
+    },
+    {
+      "name": "AggregateQuery",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "dimensions",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of AggregationDimension values to group by",
+          "validators": []
+        },
+        {
+          "name": "time_bucket",
+          "type_ref": "TimeBucketGranularity",
+          "required": false,
+          "default": "",
+          "description": "Time bucket size when 'time_bucket' is in dimensions",
+          "validators": []
+        },
+        {
+          "name": "period_start",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 start of query period",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+              "error_message": "Must be valid ISO 8601 timestamp"
+            }
+          ]
+        },
+        {
+          "name": "period_end",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 end of query period",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+              "error_message": "Must be valid ISO 8601 timestamp"
+            }
+          ]
+        },
+        {
+          "name": "filters",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Optional dimension filters (e.g., {agent_id: 'agent-1', project_id: 'proj-2'})",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Protocol contract for aggregate query parameters. Subsystems use this for cost/metrics/activity aggregation queries."
+    },
+    {
+      "name": "FilesystemErrorCode",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "ENOENT",
+        "EACCES",
+        "EISDIR",
+        "ENOTDIR",
+        "EMFILE",
+        "ENOSPC",
+        "EPERM",
+        "EEXIST",
+        "EINVAL",
+        "EIO",
+        "UNKNOWN"
+      ],
+      "inner_types": [],
+      "description": "Standard filesystem error codes mapped from Node.js ENOENT, EACCES, etc. Used by data layer for filesystem error handling."
+    },
+    {
+      "name": "FilesystemError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "code",
+          "type_ref": "FilesystemErrorCode",
+          "required": true,
+          "default": "",
+          "description": "Filesystem error code",
+          "validators": []
+        },
+        {
+          "name": "path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "File or directory path that caused the error",
+          "validators": []
+        },
+        {
+          "name": "operation",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Filesystem operation that failed (read, write, readdir, stat, etc.)",
+          "validators": []
+        },
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error message",
+          "validators": []
+        },
+        {
+          "name": "syscall",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "System call that failed (open, read, stat, etc.)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Structured filesystem error with path context. Data layer maps Node.js fs errors to this type."
+    },
+    {
+      "name": "FixtureData",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "data",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "The fixture data payload. Actual type depends on fixture type (generic T).",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Fixture metadata (description, version, created_at, tags)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Generic wrapper for test fixture data. Testing subsystem uses this to type fixture objects."
+    },
+    {
+      "name": "NamingConventionRule",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "FUNCTION_NAMES_CAMEL_CASE",
+        "TYPE_NAMES_PASCAL_CASE",
+        "ENUM_VARIANTS_SNAKE_CASE",
+        "COMPONENT_IDS_SNAKE_CASE",
+        "EVENT_TYPES_DOT_NOTATION_LOWERCASE",
+        "API_ROUTES_KEBAB_CASE",
+        "DATABASE_COLUMNS_SNAKE_CASE",
+        "BRANDED_TYPES_SUFFIX_ID"
+      ],
+      "inner_types": [],
+      "description": "Naming convention rules enforced across the codebase. Documented in JSDoc, validated in linting."
+    }
+  ],
+  "functions": [
+    {
+      "name": "createResultOk",
+      "description": "Pure factory function to construct a ResultOk value. Used by subsystems to create success results. No validation—caller must ensure value is valid.",
+      "inputs": [
+        {
+          "name": "value",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "The success payload. Generic type T depends on caller context.",
+          "validators": []
+        }
+      ],
+      "output_type": "ResultOk",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returned result has ok=true",
+        "Returned result.value === input value"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createResultErr",
+      "description": "Pure factory function to construct a ResultErr value. Used by subsystems to create error results. Validates that error conforms to StandardError shape via runtime check.",
+      "inputs": [
+        {
+          "name": "error",
+          "type_ref": "StandardError",
+          "required": true,
+          "default": "",
+          "description": "The structured error value",
+          "validators": []
+        }
+      ],
+      "output_type": "ResultErr",
+      "error_cases": [
+        {
+          "name": "InvalidErrorStructure",
+          "condition": "error does not conform to StandardError shape",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Error must conform to StandardError interface"
+          }
+        }
+      ],
+      "preconditions": [
+        "error.kind must be valid ErrorKind variant",
+        "error.message must be non-empty",
+        "error.timestamp must be valid ISO 8601"
+      ],
+      "postconditions": [
+        "Returned result has ok=false",
+        "Returned result.error === input error"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "isResultOk",
+      "description": "Pure type guard to check if Result is the Ok variant. Used for discriminated union narrowing in subsystems.",
+      "inputs": [
+        {
+          "name": "result",
+          "type_ref": "Result",
+          "required": true,
+          "default": "",
+          "description": "The Result value to check",
+          "validators": []
+        }
+      ],
+      "output_type": "bool",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returns true if result.ok === true",
+        "Returns false if result.ok === false"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "isResultErr",
+      "description": "Pure type guard to check if Result is the Err variant. Used for discriminated union narrowing in subsystems.",
+      "inputs": [
+        {
+          "name": "result",
+          "type_ref": "Result",
+          "required": true,
+          "default": "",
+          "description": "The Result value to check",
+          "validators": []
+        }
+      ],
+      "output_type": "bool",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returns true if result.ok === false",
+        "Returns false if result.ok === true"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "toISODateString",
+      "description": "Pure converter from Date object or timestamp number to ISO 8601 string. Used by subsystems to ensure all date/time values are serialized consistently. No Date objects across serialization boundaries.",
+      "inputs": [
+        {
+          "name": "input",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Date object, Unix timestamp (ms), or ISO 8601 string. If already ISO string, returns as-is after validation.",
+          "validators": []
+        }
+      ],
+      "output_type": "str",
+      "error_cases": [
+        {
+          "name": "InvalidDateInput",
+          "condition": "Input is not a Date, number, or parseable ISO string",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Input must be Date, Unix timestamp, or ISO 8601 string"
+          }
+        },
+        {
+          "name": "InvalidDate",
+          "condition": "Input Date object is Invalid Date",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Date object is invalid"
+          }
+        }
+      ],
+      "preconditions": [
+        "If input is number, must be valid Unix timestamp in milliseconds",
+        "If input is Date, must be valid Date object (not Invalid Date)",
+        "If input is string, must be parseable as ISO 8601"
+      ],
+      "postconditions": [
+        "Returned string matches ISO 8601 regex ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+        "Timezone is always included (Z or +HH:mm)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "fromISODateString",
+      "description": "Pure parser from ISO 8601 string to Date object. Used when subsystems need to perform date arithmetic (not for serialization). Returns Result<Date, StandardError>.",
+      "inputs": [
+        {
+          "name": "isoString",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 formatted timestamp string",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+              "error_message": "Must be valid ISO 8601 timestamp"
+            }
+          ]
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "ParseError",
+          "condition": "isoString cannot be parsed into valid Date (malformed, out-of-range values)",
+          "error_type": "ParseError",
+          "error_data": {
+            "message": "Failed to parse ISO 8601 string into Date"
+          }
+        }
+      ],
+      "preconditions": [
+        "isoString matches ISO 8601 regex"
+      ],
+      "postconditions": [
+        "On success, result.value is valid Date object with time matching isoString",
+        "On error, result.error.kind === 'ParseError'"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createEventEnvelope",
+      "description": "Pure factory to construct an EventEnvelope from event type, payload, and optional metadata. Generates unique ID (nanoid) and current timestamp. Used by subsystems when emitting events to SSE bus.",
+      "inputs": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Dot-notation event type (e.g., 'agent.started')",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-z]+([.][a-z_]+)+$",
+              "error_message": "Must be dot-notation lowercase event type"
+            }
+          ]
+        },
+        {
+          "name": "payload",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Event-specific data conforming to event type schema. Must be JSON-serializable.",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Optional envelope-level metadata",
+          "validators": []
+        }
+      ],
+      "output_type": "EventEnvelope",
+      "error_cases": [
+        {
+          "name": "InvalidEventType",
+          "condition": "type does not match dot-notation regex",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Event type must be dot-notation lowercase"
+          }
+        },
+        {
+          "name": "NonSerializablePayload",
+          "condition": "payload contains non-serializable values (circular refs, Functions, Symbols)",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Event payload must be JSON-serializable"
+          }
+        }
+      ],
+      "preconditions": [
+        "payload must be JSON-serializable (no circular refs, Functions, Symbols)"
+      ],
+      "postconditions": [
+        "Returned envelope has unique id (nanoid)",
+        "Returned envelope.timestamp is current time as ISO 8601 string",
+        "Returned envelope.version === 'v1'",
+        "Returned envelope.type === input type",
+        "Returned envelope.payload === input payload",
+        "Returned envelope.metadata === input metadata"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "mapNodeFsError",
+      "description": "Pure mapper from Node.js fs error to FilesystemError. Used by data layer to convert Node.js errors to structured domain errors. Extracts code, path, syscall from Node error object.",
+      "inputs": [
+        {
+          "name": "nodeError",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Node.js fs error object (typically has code, path, syscall properties)",
+          "validators": []
+        },
+        {
+          "name": "operation",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Filesystem operation being attempted (read, write, readdir, stat, etc.)",
+          "validators": []
+        }
+      ],
+      "output_type": "FilesystemError",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returned error.code is mapped from nodeError.code to FilesystemErrorCode enum (defaults to UNKNOWN if unrecognized)",
+        "Returned error.path is nodeError.path if present, otherwise empty string",
+        "Returned error.operation === input operation",
+        "Returned error.syscall is nodeError.syscall if present"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createStandardError",
+      "description": "Pure factory to construct a StandardError from kind, message, and optional context/cause. Automatically sets timestamp to current time as ISO 8601 string. Used by all subsystems to create uniform errors.",
+      "inputs": [
+        {
+          "name": "kind",
+          "type_ref": "ErrorKind",
+          "required": true,
+          "default": "",
+          "description": "Error category discriminant",
+          "validators": []
+        },
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error message",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..10000",
+              "error_message": "Error message must be 1-10000 characters"
+            }
+          ]
+        },
+        {
+          "name": "context",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Additional structured error context",
+          "validators": []
+        },
+        {
+          "name": "cause",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Underlying error message or stack trace",
+          "validators": []
+        }
+      ],
+      "output_type": "StandardError",
+      "error_cases": [
+        {
+          "name": "InvalidMessage",
+          "condition": "message is empty or exceeds 10000 characters",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Error message must be 1-10000 characters"
+          }
+        }
+      ],
+      "preconditions": [
+        "message length between 1 and 10000 characters"
+      ],
+      "postconditions": [
+        "Returned error.kind === input kind",
+        "Returned error.message === input message",
+        "Returned error.context === input context (or {} if omitted)",
+        "Returned error.cause === input cause (or empty string if omitted)",
+        "Returned error.timestamp is current time as ISO 8601 string"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "validateNamingConvention",
+      "description": "Pure validator to check if a name adheres to a NamingConventionRule. Used by linting tools and code generation utilities. Returns Result<bool, StandardError> where value=true means valid, error variant means invalid with details.",
+      "inputs": [
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "The identifier name to validate",
+          "validators": []
+        },
+        {
+          "name": "rule",
+          "type_ref": "NamingConventionRule",
+          "required": true,
+          "default": "",
+          "description": "The naming convention rule to apply",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "InvalidFunctionName",
+          "condition": "rule is FUNCTION_NAMES_CAMEL_CASE and name does not match /^[a-z][a-zA-Z0-9]*$/",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Function names must be camelCase"
+          }
+        },
+        {
+          "name": "InvalidTypeName",
+          "condition": "rule is TYPE_NAMES_PASCAL_CASE and name does not match /^[A-Z][a-zA-Z0-9]*$/",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Type names must be PascalCase"
+          }
+        },
+        {
+          "name": "InvalidEnumVariant",
+          "condition": "rule is ENUM_VARIANTS_SNAKE_CASE and name does not match /^[a-z][a-z0-9_]*$/",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Enum variants must be snake_case"
+          }
+        },
+        {
+          "name": "InvalidComponentId",
+          "condition": "rule is COMPONENT_IDS_SNAKE_CASE and name does not match /^[a-z][a-z0-9_]*$/",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Component IDs must be snake_case"
+          }
+        },
+        {
+          "name": "InvalidEventType",
+          "condition": "rule is EVENT_TYPES_DOT_NOTATION_LOWERCASE and name does not match /^[a-z]+([.][a-z_]+)+$/",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Event types must be dot.notation.lowercase"
+          }
+        },
+        {
+          "name": "InvalidApiRoute",
+          "condition": "rule is API_ROUTES_KEBAB_CASE and name does not match /^[a-z][a-z0-9-]*$/",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "API routes must be kebab-case"
+          }
+        },
+        {
+          "name": "InvalidDatabaseColumn",
+          "condition": "rule is DATABASE_COLUMNS_SNAKE_CASE and name does not match /^[a-z][a-z0-9_]*$/",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Database columns must be snake_case"
+          }
+        },
+        {
+          "name": "InvalidBrandedType",
+          "condition": "rule is BRANDED_TYPES_SUFFIX_ID and name does not match /[A-Z][a-zA-Z0-9]*Id$/",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "Branded ID types must be PascalCase ending with 'Id'"
+          }
+        }
+      ],
+      "preconditions": [
+        "name is non-empty",
+        "rule is valid NamingConventionRule variant"
+      ],
+      "postconditions": [
+        "On success, result.value === true if name matches rule pattern",
+        "On error, result.error.kind === 'ValidationError' with message explaining violation"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    }
+  ],
+  "dependencies": [
+    "activity_cost_pages",
+    "agent_dashboard",
+    "data_layer",
+    "e2e_tests",
+    "foundation",
+    "pact_visualization",
+    "project_task_management",
+    "sse_event_system"
+  ],
+  "dependency_contracts": {},
+  "invariants": [
+    "All Result values have exactly one of ok=true with value OR ok=false with error (never both, never neither)",
+    "All StandardError.timestamp values are valid ISO 8601 strings with timezone",
+    "All EventEnvelope.id values are globally unique (enforced by nanoid/uuid collision resistance)",
+    "All EventEnvelope.version values equal 'v1' for current schema",
+    "All EventEnvelope.type values match /^[a-z]+([.][a-z_]+)+$/ (dot-notation lowercase)",
+    "All ISODateString.value fields match /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$/",
+    "All FilesystemError.code values are valid FilesystemErrorCode enum variants",
+    "All AggregateQuery.period_end values are >= period_start (chronological ordering)",
+    "All Serializable implementers must produce JSON-serializable output (no circular refs, Functions, Symbols)",
+    "All Deserializable implementers must validate via Zod before constructing instances",
+    "All subsystems return Result<T, StandardError> for fallible operations (never throw exceptions for expected errors)",
+    "All event payloads are JSON-serializable (validated in createEventEnvelope)",
+    "All naming convention rules are documented in JSDoc and enforced via validateNamingConvention",
+    "Root has zero dependencies (purely type definitions and protocols)",
+    "Root exports no runtime code (only TypeScript types and type guards)"
+  ],
+  "requires": [],
+  "processing_register": "pragmatic-implementation"
+}

@@ -1,0 +1,3222 @@
+{
+  "component_id": "activity_cost_pages",
+  "name": "Activity Feed & Cost Tracking Pages",
+  "description": "Activity feed full page: chronological event list auto-updating via SSE (useEventSource hook), filterable by agent/project/event type (AC7). Cost & Token dashboard page: per-project and per-agent cost breakdown bar charts, token usage over time line charts (recharts), budget alert configuration stored in SQLite. Gracefully shows 'no data available' placeholder UI when token/cost data is missing from filesystem (AC8). Overview/home dashboard page that aggregates: agent count + status summary cards, active projects count, PACT health snapshot, last 10 activity events, cost burn rate. All monetary values stored as integer cents internally; currency formatting only in display components. Data access through lib/data/ layer only. Server components by default; client components only for SSE feed, chart wrappers, filter controls, and budget alert forms.",
+  "version": 1,
+  "types": [
+    {
+      "name": "ISOTimestamp",
+      "kind": "primitive",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Branded string type representing an ISO 8601 timestamp (e.g. '2025-01-15T09:30:00.000Z'). All timestamps in the system use this type."
+    },
+    {
+      "name": "TimeGranularity",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "hourly",
+        "daily",
+        "weekly"
+      ],
+      "inner_types": [],
+      "description": "Granularity for time-series aggregation queries."
+    },
+    {
+      "name": "PactHealthStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "healthy",
+        "degraded",
+        "unreachable",
+        "unknown"
+      ],
+      "inner_types": [],
+      "description": "Health status of the PACT daemon/system."
+    },
+    {
+      "name": "DataAvailability",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "available",
+        "no_data",
+        "not_configured",
+        "error"
+      ],
+      "inner_types": [],
+      "description": "Status type for empty state rendering. Indicates whether data is present, absent but expected, or not yet available."
+    },
+    {
+      "name": "ConnectionStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "connecting",
+        "connected",
+        "reconnecting",
+        "disconnected",
+        "error"
+      ],
+      "inner_types": [],
+      "description": "Status of the SSE connection from the client hook."
+    },
+    {
+      "name": "ActivityEventType",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "agent_started",
+        "agent_completed",
+        "agent_errored",
+        "agent_paused",
+        "agent_resumed",
+        "project_created",
+        "project_updated",
+        "project_archived",
+        "pact_proposal",
+        "pact_vote",
+        "pact_resolved",
+        "cost_alert",
+        "budget_threshold",
+        "session_started",
+        "session_ended",
+        "file_changed"
+      ],
+      "inner_types": [],
+      "description": "Discriminator literal for all known activity event kinds."
+    },
+    {
+      "name": "CostScope",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "all",
+        "project",
+        "agent"
+      ],
+      "inner_types": [],
+      "description": "Scope for cost/token queries — whether to filter by project, agent, or view all."
+    },
+    {
+      "name": "CostBreakdownGroupBy",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "project",
+        "agent",
+        "model"
+      ],
+      "inner_types": [],
+      "description": "How to group cost breakdown entries."
+    },
+    {
+      "name": "AgentStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "idle",
+        "running",
+        "paused",
+        "errored",
+        "offline"
+      ],
+      "inner_types": [],
+      "description": "Current operational status of an agent."
+    },
+    {
+      "name": "DataResultOk",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ok",
+          "type_ref": "bool",
+          "required": true,
+          "default": "true",
+          "description": "Always true for success.",
+          "validators": []
+        },
+        {
+          "name": "data",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "The typed payload. Generic parameter T in practice — typed per usage site.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Success branch of the DataResult discriminated union."
+    },
+    {
+      "name": "DataResultError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ok",
+          "type_ref": "bool",
+          "required": true,
+          "default": "false",
+          "description": "Always false for error.",
+          "validators": []
+        },
+        {
+          "name": "error_code",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Machine-readable error code (e.g. 'FILE_NOT_FOUND', 'PARSE_ERROR', 'DB_ERROR', 'TIMEOUT').",
+          "validators": []
+        },
+        {
+          "name": "error_message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error description.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Error branch of the DataResult discriminated union."
+    },
+    {
+      "name": "DataResult",
+      "kind": "union",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "DataResultOk",
+        "DataResultError"
+      ],
+      "description": "Discriminated union for all data access returns. Discriminated on the 'ok' boolean field. Components use type narrowing to handle success/error branches."
+    },
+    {
+      "name": "ActivityEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique event identifier (UUID or filesystem-derived).",
+          "validators": []
+        },
+        {
+          "name": "type",
+          "type_ref": "ActivityEventType",
+          "required": true,
+          "default": "",
+          "description": "Discriminator — the kind of event.",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "When the event occurred.",
+          "validators": []
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ID of the agent involved, if any.",
+          "validators": []
+        },
+        {
+          "name": "agent_name",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Display name of the agent involved.",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ID of the project involved, if any.",
+          "validators": []
+        },
+        {
+          "name": "project_name",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Display name of the project involved.",
+          "validators": []
+        },
+        {
+          "name": "summary",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Short human-readable summary of what happened.",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Type-specific structured data (e.g. error details for agent_errored, cost amount for cost_alert).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single activity event in the chronological feed. Discriminated by the 'type' field. All events share common fields; type-specific data lives in 'metadata'."
+    },
+    {
+      "name": "ActivityEventFilters",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by agent ID.",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by project ID.",
+          "validators": []
+        },
+        {
+          "name": "event_types",
+          "type_ref": "ActivityEventTypeList",
+          "required": false,
+          "default": "[]",
+          "description": "Filter to specific event types. Empty list means all types.",
+          "validators": []
+        },
+        {
+          "name": "from_timestamp",
+          "type_ref": "ISOTimestamp",
+          "required": false,
+          "default": "",
+          "description": "Only events after this time.",
+          "validators": []
+        },
+        {
+          "name": "to_timestamp",
+          "type_ref": "ISOTimestamp",
+          "required": false,
+          "default": "",
+          "description": "Only events before this time.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Filters for querying activity events. All fields optional — omitted fields mean 'no filter'."
+    },
+    {
+      "name": "ActivityEventTypeList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "ActivityEventType",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of ActivityEventType values for filtering."
+    },
+    {
+      "name": "PaginatedActivityEvents",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "events",
+          "type_ref": "ActivityEventList",
+          "required": true,
+          "default": "",
+          "description": "The page of events, ordered chronologically (newest first).",
+          "validators": []
+        },
+        {
+          "name": "next_cursor",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Opaque cursor for the next page. Empty string if no more pages.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Paginated result set for activity events."
+    },
+    {
+      "name": "ActivityEventList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "ActivityEvent",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of ActivityEvent objects."
+    },
+    {
+      "name": "CostEntry",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique cost entry identifier.",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "When the cost was incurred.",
+          "validators": []
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Agent that incurred the cost.",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project the cost is attributed to.",
+          "validators": []
+        },
+        {
+          "name": "model",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "LLM model used (e.g. 'claude-sonnet-4-20250514').",
+          "validators": []
+        },
+        {
+          "name": "amount_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Cost amount in integer cents (USD). Must be >= 0.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Cost amount must be non-negative."
+            }
+          ]
+        },
+        {
+          "name": "input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of input/prompt tokens.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count must be non-negative."
+            }
+          ]
+        },
+        {
+          "name": "output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of output/completion tokens.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count must be non-negative."
+            }
+          ]
+        },
+        {
+          "name": "cache_read_tokens",
+          "type_ref": "int",
+          "required": false,
+          "default": "0",
+          "description": "Number of cache read tokens (if applicable).",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count must be non-negative."
+            }
+          ]
+        },
+        {
+          "name": "cache_write_tokens",
+          "type_ref": "int",
+          "required": false,
+          "default": "0",
+          "description": "Number of cache write tokens (if applicable).",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count must be non-negative."
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single cost record. All monetary amounts in integer cents (USD) to avoid floating point issues."
+    },
+    {
+      "name": "TokenUsage",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total input tokens.",
+          "validators": []
+        },
+        {
+          "name": "output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total output tokens.",
+          "validators": []
+        },
+        {
+          "name": "cache_read_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total cache read tokens.",
+          "validators": []
+        },
+        {
+          "name": "cache_write_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total cache write tokens.",
+          "validators": []
+        },
+        {
+          "name": "total_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Sum of all token categories.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Aggregated token usage counts for a given scope/period."
+    },
+    {
+      "name": "CostTimeSeriesPoint",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "timestamp",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "Start of the time bucket.",
+          "validators": []
+        },
+        {
+          "name": "amount_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total cost in cents for this bucket.",
+          "validators": []
+        },
+        {
+          "name": "entry_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of cost entries aggregated into this point.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single point in a cost time-series chart."
+    },
+    {
+      "name": "CostTimeSeriesPointList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "CostTimeSeriesPoint",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of CostTimeSeriesPoint for chart rendering."
+    },
+    {
+      "name": "CostBreakdownEntry",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "group_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ID of the group (project_id, agent_id, or model name depending on groupBy).",
+          "validators": []
+        },
+        {
+          "name": "group_label",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Display label for the group.",
+          "validators": []
+        },
+        {
+          "name": "total_amount_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total cost in cents for this group.",
+          "validators": []
+        },
+        {
+          "name": "percentage",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Percentage of total cost (0.0-100.0).",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0.0 && <=100.0",
+              "error_message": "Percentage must be between 0 and 100."
+            }
+          ]
+        },
+        {
+          "name": "token_usage",
+          "type_ref": "TokenUsage",
+          "required": true,
+          "default": "",
+          "description": "Aggregated token usage for this group.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single bar in a cost breakdown bar chart."
+    },
+    {
+      "name": "CostBreakdownEntryList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "CostBreakdownEntry",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of CostBreakdownEntry for bar chart rendering."
+    },
+    {
+      "name": "TokenTimeSeriesPoint",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "timestamp",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "Start of the time bucket.",
+          "validators": []
+        },
+        {
+          "name": "input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Input tokens in this bucket.",
+          "validators": []
+        },
+        {
+          "name": "output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Output tokens in this bucket.",
+          "validators": []
+        },
+        {
+          "name": "cache_read_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Cache read tokens in this bucket.",
+          "validators": []
+        },
+        {
+          "name": "cache_write_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Cache write tokens in this bucket.",
+          "validators": []
+        },
+        {
+          "name": "total_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total tokens in this bucket.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single point in a token usage time-series chart."
+    },
+    {
+      "name": "TokenTimeSeriesPointList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "TokenTimeSeriesPoint",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of TokenTimeSeriesPoint for line chart rendering."
+    },
+    {
+      "name": "TimeRange",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "from_timestamp",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "Start of range (inclusive).",
+          "validators": []
+        },
+        {
+          "name": "to_timestamp",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "End of range (exclusive).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A time range for queries. Both fields required."
+    },
+    {
+      "name": "CostQueryScope",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "scope",
+          "type_ref": "CostScope",
+          "required": true,
+          "default": "",
+          "description": "Whether to query all, by project, or by agent.",
+          "validators": []
+        },
+        {
+          "name": "scope_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "The project_id or agent_id when scope is not 'all'. Empty string when scope is 'all'.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Scope specification for cost/token queries."
+    },
+    {
+      "name": "BudgetAlert",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique alert ID (UUID).",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable alert name.",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..200",
+              "error_message": "Alert name must be 1-200 characters."
+            }
+          ]
+        },
+        {
+          "name": "scope",
+          "type_ref": "CostScope",
+          "required": true,
+          "default": "",
+          "description": "Scope of the alert (all, project, agent).",
+          "validators": []
+        },
+        {
+          "name": "scope_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "The project_id or agent_id when scope is not 'all'.",
+          "validators": []
+        },
+        {
+          "name": "threshold_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Cost threshold in integer cents. Alert fires when cumulative cost in the period exceeds this.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">0",
+              "error_message": "Threshold must be positive."
+            }
+          ]
+        },
+        {
+          "name": "period",
+          "type_ref": "TimeGranularity",
+          "required": true,
+          "default": "",
+          "description": "The rolling period over which to measure cost (hourly, daily, weekly).",
+          "validators": []
+        },
+        {
+          "name": "enabled",
+          "type_ref": "bool",
+          "required": true,
+          "default": "true",
+          "description": "Whether the alert is currently active.",
+          "validators": []
+        },
+        {
+          "name": "created_at",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "When the alert was created.",
+          "validators": []
+        },
+        {
+          "name": "updated_at",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "When the alert was last updated.",
+          "validators": []
+        },
+        {
+          "name": "last_triggered_at",
+          "type_ref": "ISOTimestamp",
+          "required": false,
+          "default": "",
+          "description": "When the alert last fired. Empty string if never triggered.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A budget alert configuration, stored in SQLite. Triggers a cost_alert ActivityEvent when the threshold is exceeded."
+    },
+    {
+      "name": "BudgetAlertList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "BudgetAlert",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of BudgetAlert objects."
+    },
+    {
+      "name": "BudgetAlertInput",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable alert name.",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..200",
+              "error_message": "Alert name must be 1-200 characters."
+            }
+          ]
+        },
+        {
+          "name": "scope",
+          "type_ref": "CostScope",
+          "required": true,
+          "default": "",
+          "description": "Scope of the alert.",
+          "validators": []
+        },
+        {
+          "name": "scope_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "The project_id or agent_id when scope is not 'all'.",
+          "validators": []
+        },
+        {
+          "name": "threshold_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Cost threshold in integer cents.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">0",
+              "error_message": "Threshold must be positive."
+            }
+          ]
+        },
+        {
+          "name": "period",
+          "type_ref": "TimeGranularity",
+          "required": true,
+          "default": "",
+          "description": "The rolling period for cost measurement.",
+          "validators": []
+        },
+        {
+          "name": "enabled",
+          "type_ref": "bool",
+          "required": false,
+          "default": "true",
+          "description": "Whether the alert should be active.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Input for creating or updating a budget alert. Validated with Zod on both client and server."
+    },
+    {
+      "name": "AgentStatusSummary",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "total",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total number of known agents.",
+          "validators": []
+        },
+        {
+          "name": "running",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Agents currently running.",
+          "validators": []
+        },
+        {
+          "name": "idle",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Agents currently idle.",
+          "validators": []
+        },
+        {
+          "name": "paused",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Agents currently paused.",
+          "validators": []
+        },
+        {
+          "name": "errored",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Agents in error state.",
+          "validators": []
+        },
+        {
+          "name": "offline",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Agents offline/unreachable.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Count of agents by status for the overview dashboard."
+    },
+    {
+      "name": "PactHealthSnapshot",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "status",
+          "type_ref": "PactHealthStatus",
+          "required": true,
+          "default": "",
+          "description": "Overall PACT health status.",
+          "validators": []
+        },
+        {
+          "name": "pending_proposals",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of proposals awaiting votes.",
+          "validators": []
+        },
+        {
+          "name": "active_votes",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of votes currently in progress.",
+          "validators": []
+        },
+        {
+          "name": "last_check_at",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "When PACT health was last checked.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Snapshot of PACT system health for the overview dashboard."
+    },
+    {
+      "name": "CostBurnRate",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "current_hour_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Cost in cents for the current hour so far.",
+          "validators": []
+        },
+        {
+          "name": "current_day_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Cost in cents for the current day so far.",
+          "validators": []
+        },
+        {
+          "name": "projected_day_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Projected total cost for today based on current rate.",
+          "validators": []
+        },
+        {
+          "name": "seven_day_total_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total cost over the last 7 days.",
+          "validators": []
+        },
+        {
+          "name": "seven_day_average_daily_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Average daily cost over the last 7 days.",
+          "validators": []
+        },
+        {
+          "name": "trend",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Trend direction: 'increasing', 'decreasing', 'stable', or 'insufficient_data'.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value in ['increasing', 'decreasing', 'stable', 'insufficient_data']",
+              "error_message": "Trend must be one of: increasing, decreasing, stable, insufficient_data."
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Current and projected cost burn rate for the overview."
+    },
+    {
+      "name": "DashboardSummary",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent_summary",
+          "type_ref": "AgentStatusSummary",
+          "required": true,
+          "default": "",
+          "description": "Agent count and status breakdown.",
+          "validators": []
+        },
+        {
+          "name": "active_projects_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of currently active projects.",
+          "validators": []
+        },
+        {
+          "name": "pact_health",
+          "type_ref": "PactHealthSnapshot",
+          "required": true,
+          "default": "",
+          "description": "PACT system health snapshot.",
+          "validators": []
+        },
+        {
+          "name": "recent_events",
+          "type_ref": "ActivityEventList",
+          "required": true,
+          "default": "",
+          "description": "Last 10 activity events for the feed preview.",
+          "validators": []
+        },
+        {
+          "name": "cost_burn_rate",
+          "type_ref": "CostBurnRate",
+          "required": true,
+          "default": "",
+          "description": "Current cost burn rate and trends.",
+          "validators": []
+        },
+        {
+          "name": "cost_availability",
+          "type_ref": "DataAvailability",
+          "required": true,
+          "default": "",
+          "description": "Whether cost data is available from the filesystem.",
+          "validators": []
+        },
+        {
+          "name": "fetched_at",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "When this summary was assembled.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Aggregated data for the overview/home dashboard page. Single-fetch to minimize waterfalls."
+    },
+    {
+      "name": "SSEEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Event ID for Last-Event-ID reconnection support.",
+          "validators": []
+        },
+        {
+          "name": "event",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Event type name (matches ActivityEventType or 'heartbeat').",
+          "validators": []
+        },
+        {
+          "name": "data",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "JSON-serialized event payload.",
+          "validators": []
+        },
+        {
+          "name": "retry",
+          "type_ref": "int",
+          "required": false,
+          "default": "3000",
+          "description": "Reconnection interval in milliseconds.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A Server-Sent Event as transmitted over the SSE stream."
+    },
+    {
+      "name": "EventSourceState",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "events",
+          "type_ref": "ActivityEventList",
+          "required": true,
+          "default": "",
+          "description": "Accumulated events received via SSE, newest first.",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "ConnectionStatus",
+          "required": true,
+          "default": "",
+          "description": "Current SSE connection status.",
+          "validators": []
+        },
+        {
+          "name": "new_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of new (unacknowledged) events since last acknowledge() call.",
+          "validators": []
+        },
+        {
+          "name": "error",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Error message if status is 'error'. Empty string otherwise.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Return type of the useEventSource client hook."
+    },
+    {
+      "name": "CostDataState",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "data",
+          "type_ref": "CostTimeSeriesPointList",
+          "required": true,
+          "default": "",
+          "description": "Cost time series data, or empty list if unavailable.",
+          "validators": []
+        },
+        {
+          "name": "availability",
+          "type_ref": "DataAvailability",
+          "required": true,
+          "default": "",
+          "description": "Whether cost data is available, missing, or errored.",
+          "validators": []
+        },
+        {
+          "name": "is_loading",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether data is currently being fetched.",
+          "validators": []
+        },
+        {
+          "name": "error",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Error message if availability is 'error'. Empty string otherwise.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Return type of the useCostData client hook."
+    },
+    {
+      "name": "ApiErrorResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "error",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Machine-readable error code.",
+          "validators": []
+        },
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error description.",
+          "validators": []
+        },
+        {
+          "name": "details",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Additional error context (validation errors, etc.).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Standard JSON error response from all API routes."
+    },
+    {
+      "name": "ApiPaginatedEventsResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "events",
+          "type_ref": "ActivityEventList",
+          "required": true,
+          "default": "",
+          "description": "The page of events.",
+          "validators": []
+        },
+        {
+          "name": "next_cursor",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Cursor for next page. Null/empty if no more.",
+          "validators": []
+        },
+        {
+          "name": "total_estimate",
+          "type_ref": "int",
+          "required": false,
+          "default": "0",
+          "description": "Approximate total matching events (for UI hints, not exact).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "JSON response for GET /api/events — paginated activity events."
+    },
+    {
+      "name": "StatCardProps",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Card title text.",
+          "validators": []
+        },
+        {
+          "name": "value",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Primary display value (pre-formatted string).",
+          "validators": []
+        },
+        {
+          "name": "subtitle",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional subtitle or secondary info.",
+          "validators": []
+        },
+        {
+          "name": "trend",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Trend indicator: 'up', 'down', 'stable', or empty for no trend.",
+          "validators": []
+        },
+        {
+          "name": "trend_value",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Trend value text (e.g. '+12%').",
+          "validators": []
+        },
+        {
+          "name": "icon",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Icon name from lucide-react icon set.",
+          "validators": []
+        },
+        {
+          "name": "availability",
+          "type_ref": "DataAvailability",
+          "required": false,
+          "default": "available",
+          "description": "Data availability — shows placeholder when 'no_data'.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Props for the shared StatCard component used on the overview dashboard."
+    },
+    {
+      "name": "EmptyStateProps",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Primary message (e.g. 'No cost data available').",
+          "validators": []
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Secondary help text.",
+          "validators": []
+        },
+        {
+          "name": "icon",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Icon name from lucide-react.",
+          "validators": []
+        },
+        {
+          "name": "action_label",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional action button label.",
+          "validators": []
+        },
+        {
+          "name": "action_href",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional action button link target.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Props for the shared EmptyState placeholder component."
+    },
+    {
+      "name": "ChartDataKey",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "data_key",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Field name in the data point object to plot.",
+          "validators": []
+        },
+        {
+          "name": "label",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable label for the legend.",
+          "validators": []
+        },
+        {
+          "name": "color",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "CSS color value or Tailwind CSS variable reference.",
+          "validators": []
+        },
+        {
+          "name": "chart_type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Recharts element type: 'bar', 'line', 'area'.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value in ['bar', 'line', 'area']",
+              "error_message": "chart_type must be bar, line, or area."
+            }
+          ]
+        },
+        {
+          "name": "stack_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Stack group ID for stacked charts. Empty for non-stacked.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Typed chart data key configuration for recharts components. Maps data fields to visual properties."
+    },
+    {
+      "name": "ChartDataKeyList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "ChartDataKey",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of ChartDataKey configurations for a chart component."
+    },
+    {
+      "name": "EventsQueryParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by agent ID.",
+          "validators": []
+        },
+        {
+          "name": "project",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by project ID.",
+          "validators": []
+        },
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Comma-separated list of ActivityEventType values.",
+          "validators": []
+        },
+        {
+          "name": "cursor",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Pagination cursor from previous response.",
+          "validators": []
+        },
+        {
+          "name": "limit",
+          "type_ref": "int",
+          "required": false,
+          "default": "50",
+          "description": "Max events per page (1-100).",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..100",
+              "error_message": "Limit must be between 1 and 100."
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Zod-validated query parameters for GET /api/events."
+    },
+    {
+      "name": "SSEStreamQueryParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by agent ID.",
+          "validators": []
+        },
+        {
+          "name": "project",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by project ID.",
+          "validators": []
+        },
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Comma-separated list of ActivityEventType values.",
+          "validators": []
+        },
+        {
+          "name": "last_event_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Last-Event-ID for reconnection (from header or query param).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Zod-validated query parameters for GET /api/events/stream (SSE endpoint)."
+    },
+    {
+      "name": "CostQueryParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "scope",
+          "type_ref": "CostScope",
+          "required": false,
+          "default": "all",
+          "description": "Query scope.",
+          "validators": []
+        },
+        {
+          "name": "scope_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Scope identifier (project_id or agent_id).",
+          "validators": []
+        },
+        {
+          "name": "granularity",
+          "type_ref": "TimeGranularity",
+          "required": false,
+          "default": "daily",
+          "description": "Time bucket granularity.",
+          "validators": []
+        },
+        {
+          "name": "from",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "Range start (inclusive).",
+          "validators": []
+        },
+        {
+          "name": "to",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "Range end (exclusive).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Zod-validated query parameters for GET /api/costs."
+    },
+    {
+      "name": "CostBreakdownQueryParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "group_by",
+          "type_ref": "CostBreakdownGroupBy",
+          "required": false,
+          "default": "project",
+          "description": "How to group the breakdown.",
+          "validators": []
+        },
+        {
+          "name": "from",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "Range start (inclusive).",
+          "validators": []
+        },
+        {
+          "name": "to",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "Range end (exclusive).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Zod-validated query parameters for GET /api/costs/breakdown."
+    },
+    {
+      "name": "TokenQueryParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "scope",
+          "type_ref": "CostScope",
+          "required": false,
+          "default": "all",
+          "description": "Query scope.",
+          "validators": []
+        },
+        {
+          "name": "scope_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Scope identifier.",
+          "validators": []
+        },
+        {
+          "name": "granularity",
+          "type_ref": "TimeGranularity",
+          "required": false,
+          "default": "daily",
+          "description": "Time bucket granularity.",
+          "validators": []
+        },
+        {
+          "name": "from",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "Range start (inclusive).",
+          "validators": []
+        },
+        {
+          "name": "to",
+          "type_ref": "ISOTimestamp",
+          "required": true,
+          "default": "",
+          "description": "Range end (exclusive).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Zod-validated query parameters for GET /api/tokens."
+    }
+  ],
+  "functions": [
+    {
+      "name": "getActivityEvents",
+      "description": "Retrieves paginated activity events from filesystem sources (OpenClaw sessions, PACT proposals, agent logs). Applies optional filters for agent, project, and event type. Returns cursor-based pagination for infinite scroll. Reads from filesystem via lib/data/ layer — never queries SQLite for event data.",
+      "inputs": [
+        {
+          "name": "filters",
+          "type_ref": "ActivityEventFilters",
+          "required": true,
+          "default": "",
+          "description": "Optional filter criteria. Empty/default filters return all events.",
+          "validators": []
+        },
+        {
+          "name": "cursor",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Opaque pagination cursor from a previous call. Empty string for first page.",
+          "validators": []
+        },
+        {
+          "name": "limit",
+          "type_ref": "int",
+          "required": true,
+          "default": "50",
+          "description": "Maximum number of events to return (1-100).",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..100",
+              "error_message": "Limit must be between 1 and 100."
+            }
+          ]
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "invalid_cursor",
+          "condition": "Cursor string is malformed or references a position that no longer exists",
+          "error_type": "INVALID_CURSOR",
+          "error_data": {
+            "code": "INVALID_CURSOR"
+          }
+        },
+        {
+          "name": "filesystem_error",
+          "condition": "Cannot read event source files (OpenClaw sessions, PACT proposals, agent logs)",
+          "error_type": "FILE_READ_ERROR",
+          "error_data": {
+            "code": "FILE_READ_ERROR"
+          }
+        },
+        {
+          "name": "parse_error",
+          "condition": "Event source files exist but contain malformed/unparseable data",
+          "error_type": "PARSE_ERROR",
+          "error_data": {
+            "code": "PARSE_ERROR"
+          }
+        }
+      ],
+      "preconditions": [
+        "limit is between 1 and 100 inclusive",
+        "cursor is either empty string (first page) or a valid cursor from a previous getActivityEvents call",
+        "If filters.event_types is provided, all values must be valid ActivityEventType variants"
+      ],
+      "postconditions": [
+        "On success, data contains PaginatedActivityEvents with events.length <= limit",
+        "Events are ordered by timestamp descending (newest first)",
+        "next_cursor is empty string if and only if there are no more events matching the filters",
+        "Each event has a unique, stable id",
+        "All event timestamps are valid ISOTimestamp values"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw session directories and PACT proposal files",
+          "description": "Reads agent session logs, PACT proposal/vote files from configured filesystem paths."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n is total events scanned before cursor + limit"
+      }
+    },
+    {
+      "name": "getCostTimeSeries",
+      "description": "Retrieves cost data aggregated into time-series buckets for line/area chart rendering. Reads raw cost data from filesystem and aggregates by the specified granularity. Returns DataResult with DataAvailability semantics — returns empty array with no_data availability when cost files are missing (AC8).",
+      "inputs": [
+        {
+          "name": "scope",
+          "type_ref": "CostQueryScope",
+          "required": true,
+          "default": "",
+          "description": "Scope of the query — all costs, or filtered to a specific project/agent.",
+          "validators": []
+        },
+        {
+          "name": "granularity",
+          "type_ref": "TimeGranularity",
+          "required": true,
+          "default": "",
+          "description": "Time bucket size for aggregation.",
+          "validators": []
+        },
+        {
+          "name": "range",
+          "type_ref": "TimeRange",
+          "required": true,
+          "default": "",
+          "description": "Time range to query.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "filesystem_error",
+          "condition": "Cannot read cost data files from OpenClaw directories",
+          "error_type": "FILE_READ_ERROR",
+          "error_data": {
+            "code": "FILE_READ_ERROR"
+          }
+        },
+        {
+          "name": "parse_error",
+          "condition": "Cost data files exist but contain malformed data",
+          "error_type": "PARSE_ERROR",
+          "error_data": {
+            "code": "PARSE_ERROR"
+          }
+        },
+        {
+          "name": "invalid_scope",
+          "condition": "scope is 'project' or 'agent' but scope_id does not match any known entity",
+          "error_type": "INVALID_SCOPE",
+          "error_data": {
+            "code": "INVALID_SCOPE"
+          }
+        },
+        {
+          "name": "invalid_range",
+          "condition": "from_timestamp >= to_timestamp",
+          "error_type": "INVALID_RANGE",
+          "error_data": {
+            "code": "INVALID_RANGE"
+          }
+        }
+      ],
+      "preconditions": [
+        "range.from_timestamp < range.to_timestamp",
+        "If scope.scope is 'project' or 'agent', scope.scope_id must be non-empty",
+        "granularity is a valid TimeGranularity variant"
+      ],
+      "postconditions": [
+        "On success, data contains CostTimeSeriesPointList ordered by timestamp ascending",
+        "All amount_cents values are non-negative integers",
+        "Time buckets are contiguous with no gaps (zero-filled for periods with no cost)",
+        "First bucket starts at or after range.from_timestamp, last bucket starts before range.to_timestamp"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw cost/token data files",
+          "description": "Reads cost entries from agent session cost files in the OpenClaw directory."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 300,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n is number of raw cost entries in the range"
+      }
+    },
+    {
+      "name": "getCostBreakdown",
+      "description": "Retrieves cost data grouped by project, agent, or model for bar chart rendering. Computes percentage of total for each group. Returns DataResult with proper DataAvailability when cost data is missing from filesystem.",
+      "inputs": [
+        {
+          "name": "group_by",
+          "type_ref": "CostBreakdownGroupBy",
+          "required": true,
+          "default": "",
+          "description": "How to group the breakdown — by project, agent, or model.",
+          "validators": []
+        },
+        {
+          "name": "range",
+          "type_ref": "TimeRange",
+          "required": true,
+          "default": "",
+          "description": "Time range to query.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "filesystem_error",
+          "condition": "Cannot read cost data files",
+          "error_type": "FILE_READ_ERROR",
+          "error_data": {
+            "code": "FILE_READ_ERROR"
+          }
+        },
+        {
+          "name": "parse_error",
+          "condition": "Cost data files contain malformed data",
+          "error_type": "PARSE_ERROR",
+          "error_data": {
+            "code": "PARSE_ERROR"
+          }
+        },
+        {
+          "name": "invalid_range",
+          "condition": "from_timestamp >= to_timestamp",
+          "error_type": "INVALID_RANGE",
+          "error_data": {
+            "code": "INVALID_RANGE"
+          }
+        }
+      ],
+      "preconditions": [
+        "range.from_timestamp < range.to_timestamp",
+        "group_by is a valid CostBreakdownGroupBy variant"
+      ],
+      "postconditions": [
+        "On success, data contains CostBreakdownEntryList ordered by total_amount_cents descending",
+        "All percentage values sum to approximately 100.0 (within floating point tolerance)",
+        "All total_amount_cents values are non-negative",
+        "Each entry includes aggregated TokenUsage"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw cost/token data files",
+          "description": "Reads and aggregates cost entries from filesystem."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 300,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n is number of raw cost entries in the range"
+      }
+    },
+    {
+      "name": "getTokenTimeSeries",
+      "description": "Retrieves token usage data aggregated into time-series buckets for line chart rendering. Breaks down into input, output, cache read, and cache write token categories. Gracefully returns empty data with 'no_data' availability when token data files are missing (AC8).",
+      "inputs": [
+        {
+          "name": "scope",
+          "type_ref": "CostQueryScope",
+          "required": true,
+          "default": "",
+          "description": "Scope of the query.",
+          "validators": []
+        },
+        {
+          "name": "granularity",
+          "type_ref": "TimeGranularity",
+          "required": true,
+          "default": "",
+          "description": "Time bucket size.",
+          "validators": []
+        },
+        {
+          "name": "range",
+          "type_ref": "TimeRange",
+          "required": true,
+          "default": "",
+          "description": "Time range to query.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "filesystem_error",
+          "condition": "Cannot read token data files",
+          "error_type": "FILE_READ_ERROR",
+          "error_data": {
+            "code": "FILE_READ_ERROR"
+          }
+        },
+        {
+          "name": "parse_error",
+          "condition": "Token data files contain malformed data",
+          "error_type": "PARSE_ERROR",
+          "error_data": {
+            "code": "PARSE_ERROR"
+          }
+        },
+        {
+          "name": "invalid_scope",
+          "condition": "scope_id does not match known entity",
+          "error_type": "INVALID_SCOPE",
+          "error_data": {
+            "code": "INVALID_SCOPE"
+          }
+        },
+        {
+          "name": "invalid_range",
+          "condition": "from_timestamp >= to_timestamp",
+          "error_type": "INVALID_RANGE",
+          "error_data": {
+            "code": "INVALID_RANGE"
+          }
+        }
+      ],
+      "preconditions": [
+        "range.from_timestamp < range.to_timestamp",
+        "If scope.scope is 'project' or 'agent', scope.scope_id must be non-empty"
+      ],
+      "postconditions": [
+        "On success, data contains TokenTimeSeriesPointList ordered by timestamp ascending",
+        "All token count values are non-negative integers",
+        "total_tokens equals sum of input_tokens + output_tokens + cache_read_tokens + cache_write_tokens for each point",
+        "Time buckets are contiguous with zero-fill for empty periods"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw token usage data files",
+          "description": "Reads token usage entries from agent session files."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 300,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n is number of raw token entries in the range"
+      }
+    },
+    {
+      "name": "getDashboardSummary",
+      "description": "Assembles the complete overview dashboard data in a single call to minimize client waterfalls. Reads agent status from OpenClaw, PACT health from PACT CLI/files, recent events from filesystem, and cost burn rate from cost data. Each sub-section degrades gracefully — a failure in one section (e.g., PACT unreachable) does not fail the entire summary.",
+      "inputs": [],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "total_failure",
+          "condition": "All data sources are inaccessible simultaneously (filesystem unreadable)",
+          "error_type": "TOTAL_FAILURE",
+          "error_data": {
+            "code": "TOTAL_FAILURE"
+          }
+        },
+        {
+          "name": "timeout",
+          "condition": "Assembling the summary exceeds the timeout budget",
+          "error_type": "TIMEOUT",
+          "error_data": {
+            "code": "TIMEOUT"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, data contains DashboardSummary",
+        "recent_events contains at most 10 events, ordered newest first",
+        "cost_availability reflects actual filesystem data presence",
+        "pact_health.status is 'unreachable' if PACT files/CLI are not accessible (not an error)",
+        "All integer-cents values in cost_burn_rate are non-negative",
+        "fetched_at is a valid ISOTimestamp representing when the summary was assembled"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw agent sessions, PACT files, cost data files",
+          "description": "Reads multiple filesystem sources to assemble the dashboard summary."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 500,
+        "max_memory_mb": 64,
+        "complexity": null
+      }
+    },
+    {
+      "name": "getBudgetAlerts",
+      "description": "Retrieves all budget alert configurations from SQLite. Returns the full list — budget alerts are expected to be a small set (typically <50).",
+      "inputs": [],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "db_error",
+          "condition": "SQLite query fails (database locked, corrupted, etc.)",
+          "error_type": "DB_ERROR",
+          "error_data": {
+            "code": "DB_ERROR"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, data contains BudgetAlertList",
+        "Alerts are ordered by created_at descending (newest first)",
+        "All threshold_cents values are positive integers",
+        "All timestamps are valid ISOTimestamp values"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite database file",
+          "description": "Reads budget_alerts table from the SQLite database."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "createBudgetAlert",
+      "description": "Creates a new budget alert configuration in SQLite. Validates input with Zod schema. Generates a UUID for the new alert and sets created_at/updated_at timestamps.",
+      "inputs": [
+        {
+          "name": "input",
+          "type_ref": "BudgetAlertInput",
+          "required": true,
+          "default": "",
+          "description": "Budget alert configuration to create. Validated with Zod before insertion.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "validation_error",
+          "condition": "Input fails Zod validation (missing fields, invalid values)",
+          "error_type": "VALIDATION_ERROR",
+          "error_data": {
+            "code": "VALIDATION_ERROR"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite insert fails",
+          "error_type": "DB_ERROR",
+          "error_data": {
+            "code": "DB_ERROR"
+          }
+        },
+        {
+          "name": "duplicate_name",
+          "condition": "An alert with the same name already exists for the same scope",
+          "error_type": "DUPLICATE_NAME",
+          "error_data": {
+            "code": "DUPLICATE_NAME"
+          }
+        }
+      ],
+      "preconditions": [
+        "input passes BudgetAlertInput Zod validation",
+        "input.name is 1-200 characters",
+        "input.threshold_cents is a positive integer",
+        "If input.scope is 'project' or 'agent', input.scope_id must be non-empty"
+      ],
+      "postconditions": [
+        "On success, data contains the created BudgetAlert with generated id, created_at, and updated_at",
+        "The alert exists in the SQLite budget_alerts table",
+        "created_at and updated_at are identical on creation"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite budget_alerts table",
+          "description": "Inserts a new row into the budget_alerts table."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "updateBudgetAlert",
+      "description": "Updates an existing budget alert configuration in SQLite. Validates input with Zod schema. Updates the updated_at timestamp.",
+      "inputs": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID of the budget alert to update.",
+          "validators": []
+        },
+        {
+          "name": "input",
+          "type_ref": "BudgetAlertInput",
+          "required": true,
+          "default": "",
+          "description": "New configuration values. All fields are applied (full replacement, not partial patch).",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "not_found",
+          "condition": "No budget alert exists with the given id",
+          "error_type": "NOT_FOUND",
+          "error_data": {
+            "code": "NOT_FOUND"
+          }
+        },
+        {
+          "name": "validation_error",
+          "condition": "Input fails Zod validation",
+          "error_type": "VALIDATION_ERROR",
+          "error_data": {
+            "code": "VALIDATION_ERROR"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite update fails",
+          "error_type": "DB_ERROR",
+          "error_data": {
+            "code": "DB_ERROR"
+          }
+        },
+        {
+          "name": "duplicate_name",
+          "condition": "Another alert (different id) with the same name exists for the same scope",
+          "error_type": "DUPLICATE_NAME",
+          "error_data": {
+            "code": "DUPLICATE_NAME"
+          }
+        }
+      ],
+      "preconditions": [
+        "id is a non-empty string",
+        "input passes BudgetAlertInput Zod validation",
+        "A budget alert with the given id exists in the database"
+      ],
+      "postconditions": [
+        "On success, data contains the updated BudgetAlert",
+        "updated_at is set to the current timestamp",
+        "created_at is unchanged from the original alert",
+        "All other fields reflect the input values"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite budget_alerts table",
+          "description": "Updates an existing row in the budget_alerts table."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "deleteBudgetAlert",
+      "description": "Deletes a budget alert configuration from SQLite by ID.",
+      "inputs": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID of the budget alert to delete.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "not_found",
+          "condition": "No budget alert exists with the given id",
+          "error_type": "NOT_FOUND",
+          "error_data": {
+            "code": "NOT_FOUND"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite delete fails",
+          "error_type": "DB_ERROR",
+          "error_data": {
+            "code": "DB_ERROR"
+          }
+        }
+      ],
+      "preconditions": [
+        "id is a non-empty string"
+      ],
+      "postconditions": [
+        "On success, data contains the deleted BudgetAlert (for undo/confirmation UI)",
+        "The alert no longer exists in the SQLite budget_alerts table"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite budget_alerts table",
+          "description": "Deletes a row from the budget_alerts table."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "handleGetEvents",
+      "description": "API route handler for GET /api/events. Validates query params with Zod EventsQueryParams schema, calls getActivityEvents, returns typed JSON. Returns 400 for validation errors, 500 for internal errors.",
+      "inputs": [
+        {
+          "name": "query_params",
+          "type_ref": "EventsQueryParams",
+          "required": true,
+          "default": "",
+          "description": "Validated query parameters from the URL.",
+          "validators": []
+        }
+      ],
+      "output_type": "ApiPaginatedEventsResponse",
+      "error_cases": [
+        {
+          "name": "validation_error",
+          "condition": "Query params fail Zod schema validation",
+          "error_type": "VALIDATION_ERROR",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "internal_error",
+          "condition": "getActivityEvents returns DataResultError",
+          "error_type": "INTERNAL_ERROR",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "Request method is GET",
+        "Query params pass Zod validation"
+      ],
+      "postconditions": [
+        "Response Content-Type is application/json",
+        "HTTP 200 with ApiPaginatedEventsResponse on success",
+        "HTTP 400 with ApiErrorResponse on validation failure",
+        "HTTP 500 with ApiErrorResponse on internal error"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw/PACT filesystem (delegated to getActivityEvents)",
+          "description": "Delegates to getActivityEvents which reads filesystem."
+        },
+        {
+          "kind": "logging",
+          "target": "API request log",
+          "description": "Logs request params and response status."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 250,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "handleGetEventsStream",
+      "description": "API route handler for GET /api/events/stream. Establishes an SSE connection with the client. Supports Last-Event-ID header for reconnection. Subscribes to the SSE event bus with optional filters. Sends heartbeat events every 30 seconds to keep the connection alive. Multiplexes all event types over a single stream.",
+      "inputs": [
+        {
+          "name": "query_params",
+          "type_ref": "SSEStreamQueryParams",
+          "required": true,
+          "default": "",
+          "description": "Validated query/header parameters including optional Last-Event-ID.",
+          "validators": []
+        }
+      ],
+      "output_type": "str",
+      "error_cases": [
+        {
+          "name": "validation_error",
+          "condition": "Query params or headers fail validation",
+          "error_type": "VALIDATION_ERROR",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "event_bus_error",
+          "condition": "Cannot subscribe to the SSE event bus",
+          "error_type": "EVENT_BUS_ERROR",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "Request method is GET",
+        "Client accepts text/event-stream content type"
+      ],
+      "postconditions": [
+        "Response Content-Type is text/event-stream",
+        "Response includes Cache-Control: no-cache",
+        "Response includes Connection: keep-alive",
+        "Each SSE message includes id, event, and data fields",
+        "If Last-Event-ID is provided, missed events since that ID are replayed before live streaming",
+        "Heartbeat events are sent every 30 seconds with event type 'heartbeat'",
+        "Stream terminates cleanly when client disconnects"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SSE event bus (in-memory)",
+          "description": "Subscribes to the in-memory SSE event bus for real-time events."
+        },
+        {
+          "kind": "network_call",
+          "target": "SSE stream to client",
+          "description": "Maintains a long-lived SSE connection to the client."
+        },
+        {
+          "kind": "logging",
+          "target": "SSE connection log",
+          "description": "Logs connection open/close and reconnection events."
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "handleGetCosts",
+      "description": "API route handler for GET /api/costs. Validates query params with Zod CostQueryParams schema, calls getCostTimeSeries, returns typed JSON with DataAvailability info.",
+      "inputs": [
+        {
+          "name": "query_params",
+          "type_ref": "CostQueryParams",
+          "required": true,
+          "default": "",
+          "description": "Validated query parameters.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "validation_error",
+          "condition": "Query params fail Zod validation",
+          "error_type": "VALIDATION_ERROR",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "internal_error",
+          "condition": "getCostTimeSeries returns error",
+          "error_type": "INTERNAL_ERROR",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "Request method is GET",
+        "Query params pass Zod validation",
+        "from < to"
+      ],
+      "postconditions": [
+        "Response Content-Type is application/json",
+        "HTTP 200 on success (even when no data — availability field indicates status)",
+        "HTTP 400 on validation failure",
+        "HTTP 500 on internal error",
+        "Response includes 'availability' field of type DataAvailability"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw cost data files (delegated)",
+          "description": "Delegates to getCostTimeSeries."
+        },
+        {
+          "kind": "logging",
+          "target": "API request log",
+          "description": "Logs request and response."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 350,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "handleGetCostsBreakdown",
+      "description": "API route handler for GET /api/costs/breakdown. Validates query params, calls getCostBreakdown, returns grouped cost data for bar charts.",
+      "inputs": [
+        {
+          "name": "query_params",
+          "type_ref": "CostBreakdownQueryParams",
+          "required": true,
+          "default": "",
+          "description": "Validated query parameters.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "validation_error",
+          "condition": "Query params fail Zod validation",
+          "error_type": "VALIDATION_ERROR",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "internal_error",
+          "condition": "getCostBreakdown returns error",
+          "error_type": "INTERNAL_ERROR",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "Request method is GET",
+        "Query params pass Zod validation",
+        "from < to"
+      ],
+      "postconditions": [
+        "Response Content-Type is application/json",
+        "HTTP 200 on success with CostBreakdownEntryList",
+        "HTTP 400 on validation failure",
+        "HTTP 500 on internal error"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw cost data files (delegated)",
+          "description": "Delegates to getCostBreakdown."
+        },
+        {
+          "kind": "logging",
+          "target": "API request log",
+          "description": "Logs request and response."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 350,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "handleGetTokens",
+      "description": "API route handler for GET /api/tokens. Validates query params, calls getTokenTimeSeries, returns token usage time series.",
+      "inputs": [
+        {
+          "name": "query_params",
+          "type_ref": "TokenQueryParams",
+          "required": true,
+          "default": "",
+          "description": "Validated query parameters.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "validation_error",
+          "condition": "Query params fail Zod validation",
+          "error_type": "VALIDATION_ERROR",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "internal_error",
+          "condition": "getTokenTimeSeries returns error",
+          "error_type": "INTERNAL_ERROR",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "Request method is GET",
+        "Query params pass Zod validation",
+        "from < to"
+      ],
+      "postconditions": [
+        "Response Content-Type is application/json",
+        "HTTP 200 on success with TokenTimeSeriesPointList and availability",
+        "HTTP 400 on validation failure",
+        "HTTP 500 on internal error"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw token data files (delegated)",
+          "description": "Delegates to getTokenTimeSeries."
+        },
+        {
+          "kind": "logging",
+          "target": "API request log",
+          "description": "Logs request and response."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 350,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "handleBudgetAlertsCRUD",
+      "description": "API route handler for /api/budget-alerts. Dispatches to GET (list all), POST (create), PUT (update by id), DELETE (delete by id). Each operation validates input with Zod and returns typed JSON.",
+      "inputs": [
+        {
+          "name": "method",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "HTTP method: GET, POST, PUT, or DELETE.",
+          "validators": []
+        },
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Budget alert ID for PUT/DELETE operations. Empty for GET/POST.",
+          "validators": []
+        },
+        {
+          "name": "body",
+          "type_ref": "BudgetAlertInput",
+          "required": false,
+          "default": "",
+          "description": "Request body for POST/PUT operations. Ignored for GET/DELETE.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "method_not_allowed",
+          "condition": "HTTP method is not GET, POST, PUT, or DELETE",
+          "error_type": "METHOD_NOT_ALLOWED",
+          "error_data": {
+            "http_status": "405"
+          }
+        },
+        {
+          "name": "validation_error",
+          "condition": "Body fails Zod validation for POST/PUT",
+          "error_type": "VALIDATION_ERROR",
+          "error_data": {
+            "http_status": "400"
+          }
+        },
+        {
+          "name": "not_found",
+          "condition": "Alert id not found for PUT/DELETE",
+          "error_type": "NOT_FOUND",
+          "error_data": {
+            "http_status": "404"
+          }
+        },
+        {
+          "name": "duplicate_name",
+          "condition": "Alert name already exists for same scope",
+          "error_type": "DUPLICATE_NAME",
+          "error_data": {
+            "http_status": "409"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite operation fails",
+          "error_type": "DB_ERROR",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "method is one of GET, POST, PUT, DELETE",
+        "For PUT and DELETE, id must be a non-empty string",
+        "For POST and PUT, body must pass BudgetAlertInput Zod validation"
+      ],
+      "postconditions": [
+        "GET returns HTTP 200 with BudgetAlertList",
+        "POST returns HTTP 201 with created BudgetAlert",
+        "PUT returns HTTP 200 with updated BudgetAlert",
+        "DELETE returns HTTP 200 with deleted BudgetAlert",
+        "All error responses use ApiErrorResponse format"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite database (for GET)",
+          "description": "Reads budget_alerts table."
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite budget_alerts table (for POST/PUT/DELETE)",
+          "description": "Creates, updates, or deletes rows in budget_alerts."
+        },
+        {
+          "kind": "logging",
+          "target": "API request log",
+          "description": "Logs all CRUD operations."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 150,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "handleGetDashboardSummary",
+      "description": "API route handler for GET /api/dashboard/summary. Calls getDashboardSummary and returns the aggregated overview data. No query params needed.",
+      "inputs": [],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "internal_error",
+          "condition": "getDashboardSummary returns TOTAL_FAILURE or TIMEOUT",
+          "error_type": "INTERNAL_ERROR",
+          "error_data": {
+            "http_status": "500"
+          }
+        }
+      ],
+      "preconditions": [
+        "Request method is GET"
+      ],
+      "postconditions": [
+        "Response Content-Type is application/json",
+        "HTTP 200 with DashboardSummary on success",
+        "HTTP 500 with ApiErrorResponse on total failure"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "Multiple filesystem sources (delegated to getDashboardSummary)",
+          "description": "Delegates to getDashboardSummary which reads multiple data sources."
+        },
+        {
+          "kind": "logging",
+          "target": "API request log",
+          "description": "Logs request and response."
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 600,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "useEventSource",
+      "description": "React client hook that establishes an SSE connection to /api/events/stream with optional filters. Returns accumulated events, connection status, and new event count with acknowledge function. Handles automatic reconnection with exponential backoff. Respects Last-Event-ID for gap-free reconnection. This is a 'use client' hook.",
+      "inputs": [
+        {
+          "name": "filters",
+          "type_ref": "ActivityEventFilters",
+          "required": true,
+          "default": "",
+          "description": "Optional filters to apply to the SSE stream. Changes to filters reconnect with new params.",
+          "validators": []
+        }
+      ],
+      "output_type": "EventSourceState",
+      "error_cases": [
+        {
+          "name": "connection_failed",
+          "condition": "Cannot establish SSE connection (network error, server down)",
+          "error_type": "CONNECTION_ERROR",
+          "error_data": {
+            "status": "error"
+          }
+        },
+        {
+          "name": "parse_error",
+          "condition": "Received SSE event data is not valid JSON",
+          "error_type": "PARSE_ERROR",
+          "error_data": {
+            "status": "connected"
+          }
+        }
+      ],
+      "preconditions": [
+        "Called within a React component tree (client component)",
+        "Browser environment with EventSource API support"
+      ],
+      "postconditions": [
+        "Returns EventSourceState with current connection status",
+        "events array is ordered newest-first and capped at 500 items to prevent memory issues",
+        "new_count increments for each received event until acknowledge() is called",
+        "On unmount, SSE connection is closed and resources are cleaned up",
+        "On filter change, old connection is closed and new one is opened"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "/api/events/stream",
+          "description": "Maintains a long-lived SSE connection to the server."
+        },
+        {
+          "kind": "mutates_state",
+          "target": "React component state",
+          "description": "Updates events array, status, and new_count state."
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "useCostData",
+      "description": "React client hook that fetches cost time-series data from /api/costs with SWR-style caching and revalidation. Returns data, loading state, and DataAvailability for empty state rendering. This is a 'use client' hook.",
+      "inputs": [
+        {
+          "name": "scope",
+          "type_ref": "CostQueryScope",
+          "required": true,
+          "default": "",
+          "description": "Query scope (all, project, agent).",
+          "validators": []
+        },
+        {
+          "name": "granularity",
+          "type_ref": "TimeGranularity",
+          "required": true,
+          "default": "",
+          "description": "Time bucket granularity.",
+          "validators": []
+        },
+        {
+          "name": "range",
+          "type_ref": "TimeRange",
+          "required": true,
+          "default": "",
+          "description": "Time range for the query.",
+          "validators": []
+        }
+      ],
+      "output_type": "CostDataState",
+      "error_cases": [
+        {
+          "name": "fetch_error",
+          "condition": "Network error or API returns 5xx",
+          "error_type": "FETCH_ERROR",
+          "error_data": {
+            "availability": "error"
+          }
+        },
+        {
+          "name": "validation_error",
+          "condition": "API returns 400 due to invalid params",
+          "error_type": "VALIDATION_ERROR",
+          "error_data": {
+            "availability": "error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Called within a React component tree (client component)",
+        "range.from_timestamp < range.to_timestamp"
+      ],
+      "postconditions": [
+        "Returns CostDataState reflecting current fetch state",
+        "is_loading is true during initial fetch and revalidation",
+        "availability is 'no_data' when API returns empty data set (not an error)",
+        "availability is 'error' when API call fails",
+        "availability is 'available' when data is present",
+        "data is empty array (not null) when unavailable — safe to pass to recharts"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "/api/costs",
+          "description": "Fetches cost data from the API endpoint."
+        },
+        {
+          "kind": "mutates_state",
+          "target": "React component state + SWR cache",
+          "description": "Updates data, loading, and availability state."
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "renderStatCard",
+      "description": "Pure server component that renders a single stat card for the overview dashboard. Accepts StatCardProps and renders a styled card with title, value, optional trend indicator, and optional icon. Shows EmptyState placeholder when availability is not 'available'. No client-side interactivity needed.",
+      "inputs": [
+        {
+          "name": "props",
+          "type_ref": "StatCardProps",
+          "required": true,
+          "default": "",
+          "description": "Card display properties.",
+          "validators": []
+        }
+      ],
+      "output_type": "str",
+      "error_cases": [],
+      "preconditions": [
+        "props.title is non-empty",
+        "props.value is non-empty when availability is 'available'"
+      ],
+      "postconditions": [
+        "Returns valid React server component JSX (rendered HTML)",
+        "When availability is 'no_data' or 'not_configured', renders placeholder instead of value",
+        "When trend is provided, renders trend indicator with appropriate color (green for 'down' cost trend, etc.)",
+        "Component uses Tailwind CSS classes and CSS variables for styling",
+        "Component supports dark mode by default"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": "Pure render function with no side effects."
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "renderEmptyState",
+      "description": "Pure server component that renders a placeholder UI for missing/unavailable data (AC8). Used when cost, token, or activity data is not available from the filesystem. Provides contextual messaging and optional action link.",
+      "inputs": [
+        {
+          "name": "props",
+          "type_ref": "EmptyStateProps",
+          "required": true,
+          "default": "",
+          "description": "Empty state display properties.",
+          "validators": []
+        }
+      ],
+      "output_type": "str",
+      "error_cases": [],
+      "preconditions": [
+        "props.title is non-empty"
+      ],
+      "postconditions": [
+        "Returns valid React server component JSX",
+        "Renders icon, title, description, and optional action button",
+        "Uses muted/subtle styling to indicate absence rather than error",
+        "Supports dark mode by default"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": "Pure render function with no side effects."
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "formatCentsToCurrency",
+      "description": "Pure utility function that formats integer cents to a USD currency display string. Used only in display/UI layer — never for computation. Handles edge cases like zero, very large values, and negative values (for refunds/adjustments).",
+      "inputs": [
+        {
+          "name": "amount_cents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Amount in integer cents.",
+          "validators": []
+        },
+        {
+          "name": "compact",
+          "type_ref": "bool",
+          "required": false,
+          "default": "false",
+          "description": "If true, uses compact notation for large values (e.g. '$1.2K' instead of '$1,200.00').",
+          "validators": []
+        }
+      ],
+      "output_type": "str",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returns a string starting with '$' (or '-$' for negative values)",
+        "Non-compact format includes exactly 2 decimal places",
+        "Compact format uses K/M suffixes for values >= 1000 cents ($10+)",
+        "Zero returns '$0.00' (non-compact) or '$0' (compact)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": "Pure function with no side effects."
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "formatTokenCount",
+      "description": "Pure utility function that formats token counts for display. Uses compact notation (e.g. '1.2M tokens') for large values.",
+      "inputs": [
+        {
+          "name": "count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Token count.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count must be non-negative."
+            }
+          ]
+        }
+      ],
+      "output_type": "str",
+      "error_cases": [],
+      "preconditions": [
+        "count is non-negative"
+      ],
+      "postconditions": [
+        "Returns a human-readable string with appropriate suffix (K, M, B)",
+        "Values under 1000 are shown as-is",
+        "Suffix values include 1 decimal place (e.g. '1.2M')"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": "Pure function with no side effects."
+        }
+      ],
+      "performance_budget": null
+    }
+  ],
+  "dependencies": [],
+  "dependency_contracts": {},
+  "invariants": [
+    "All monetary values are stored and computed as integer cents (int); conversion to currency display strings happens only in formatCentsToCurrency at the UI layer",
+    "All timestamps throughout the system are ISOTimestamp branded strings in ISO 8601 format with timezone",
+    "Components never read files or query SQLite directly — all data access goes through the lib/data/ layer functions defined in this contract",
+    "Server components are used by default; client components ('use client') are used only for: ActivityFeed (SSE via useEventSource), chart wrappers (recharts requires client), filter controls (interactivity), and budget alert forms (interactivity)",
+    "The SSE endpoint multiplexes all event types over a single stream; clients filter client-side or via query params",
+    "All API query parameters are validated with Zod schemas before processing; invalid params return HTTP 400 with ApiErrorResponse",
+    "When filesystem data sources are missing or unreadable, functions return success with empty data and DataAvailability='no_data' rather than throwing errors (graceful degradation per AC8)",
+    "PACT health check failures result in PactHealthStatus='unreachable', not system errors — the dashboard continues to function",
+    "Budget alerts are the only data written to SQLite by this component; all other data is read from the filesystem",
+    "The useEventSource hook caps accumulated events at 500 items to prevent unbounded memory growth in the browser",
+    "Token counts (input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) are always non-negative integers",
+    "CostBreakdownEntry percentage values across all entries for a single query sum to approximately 100.0",
+    "Time series responses contain contiguous, zero-filled buckets with no gaps within the requested range",
+    "SSE reconnection uses Last-Event-ID to replay missed events, ensuring no event loss during brief disconnections",
+    "Zod validation schemas for API params are shared between client (URL construction) and server (param validation) to ensure consistency",
+    "The getDashboardSummary function degrades gracefully per sub-section — a failure in PACT health does not prevent agent summary or cost burn rate from being returned"
+  ],
+  "requires": [
+    "lib/data/ data access layer",
+    "lib/db/ SQLite schema with budget_alerts table",
+    "lib/sse/ SSE event bus",
+    "lib/pact/ PACT CLI wrapper + file parser",
+    "lib/openclaw/ OpenClaw config/session reader",
+    "components/ui/ shadcn/ui primitives",
+    "recharts charting library",
+    "zod validation library",
+    "better-sqlite3 database driver"
+  ],
+  "processing_register": "pragmatic-implementation"
+}

@@ -1,0 +1,1986 @@
+{
+  "component_id": "sse_event_system",
+  "name": "SSE Event Bus & File Watching",
+  "description": "Real-time event infrastructure providing in-process pub/sub event bus, filesystem watching with diff synthesis, SSE streaming endpoint, and event persistence. Watches OpenClaw and PACT directories, multiplexes typed events (agent actions, PACT transitions, task changes, errors), and streams to clients with filtering support. HMR-safe singleton pattern with graceful shutdown.",
+  "version": 1,
+  "types": [
+    {
+      "name": "EventId",
+      "kind": "primitive",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Branded string identifier for events (nanoid or UUID)"
+    },
+    {
+      "name": "ConnectionId",
+      "kind": "primitive",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Branded string identifier for SSE connections"
+    },
+    {
+      "name": "Timestamp",
+      "kind": "primitive",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "ISO 8601 timestamp string"
+    },
+    {
+      "name": "EventVersion",
+      "kind": "primitive",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "String literal 'v1' for event schema version"
+    },
+    {
+      "name": "EventType",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "agent.started",
+        "agent.stopped",
+        "agent.error",
+        "agent.action_completed",
+        "pact.transition",
+        "pact.component_completed",
+        "pact.contract_validated",
+        "pact.error",
+        "task.created",
+        "task.updated",
+        "task.completed",
+        "task.deleted",
+        "system.watcher_ready",
+        "system.watcher_error",
+        "system.parse_error",
+        "system.connection_opened",
+        "system.shutdown",
+        "system.heartbeat"
+      ],
+      "inner_types": [],
+      "description": "Namespaced event type discriminator"
+    },
+    {
+      "name": "BaseEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "EventId",
+          "required": true,
+          "default": "",
+          "description": "Unique event identifier",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "Timestamp",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp when event occurred",
+          "validators": []
+        },
+        {
+          "name": "type",
+          "type_ref": "EventType",
+          "required": true,
+          "default": "",
+          "description": "Event type discriminator",
+          "validators": []
+        },
+        {
+          "name": "version",
+          "type_ref": "EventVersion",
+          "required": true,
+          "default": "",
+          "description": "Event schema version, always 'v1'",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Common fields for all events"
+    },
+    {
+      "name": "AgentEventPayload",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Agent identifier",
+          "validators": []
+        },
+        {
+          "name": "action",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Action name for action_completed events",
+          "validators": []
+        },
+        {
+          "name": "error_message",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Error message for error events",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Additional context data",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Payload for agent.* events"
+    },
+    {
+      "name": "AgentEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "EventId",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "Timestamp",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "type",
+          "type_ref": "EventType",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^agent\\.",
+              "error_message": "Type must start with 'agent.'"
+            }
+          ]
+        },
+        {
+          "name": "version",
+          "type_ref": "EventVersion",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "payload",
+          "type_ref": "AgentEventPayload",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Agent lifecycle and action events"
+    },
+    {
+      "name": "PactEventPayload",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "PACT project identifier",
+          "validators": []
+        },
+        {
+          "name": "component_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Component identifier for component-level events",
+          "validators": []
+        },
+        {
+          "name": "from_state",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Previous state for transition events",
+          "validators": []
+        },
+        {
+          "name": "to_state",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "New state for transition events",
+          "validators": []
+        },
+        {
+          "name": "error_message",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Error message for error events",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Additional context data",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Payload for pact.* events"
+    },
+    {
+      "name": "PactEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "EventId",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "Timestamp",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "type",
+          "type_ref": "EventType",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^pact\\.",
+              "error_message": "Type must start with 'pact.'"
+            }
+          ]
+        },
+        {
+          "name": "version",
+          "type_ref": "EventVersion",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "payload",
+          "type_ref": "PactEventPayload",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "PACT state transition and validation events"
+    },
+    {
+      "name": "TaskEventPayload",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "task_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task identifier",
+          "validators": []
+        },
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Task title",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Task status (pending/in_progress/completed/cancelled)",
+          "validators": []
+        },
+        {
+          "name": "assigned_agent",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Assigned agent identifier",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Additional context data",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Payload for task.* events"
+    },
+    {
+      "name": "TaskEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "EventId",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "Timestamp",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "type",
+          "type_ref": "EventType",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^task\\.",
+              "error_message": "Type must start with 'task.'"
+            }
+          ]
+        },
+        {
+          "name": "version",
+          "type_ref": "EventVersion",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "payload",
+          "type_ref": "TaskEventPayload",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Task lifecycle events"
+    },
+    {
+      "name": "SystemEventPayload",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "connection_id",
+          "type_ref": "ConnectionId",
+          "required": false,
+          "default": "",
+          "description": "Connection identifier for connection events",
+          "validators": []
+        },
+        {
+          "name": "file_path",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "File path for watcher/parse events",
+          "validators": []
+        },
+        {
+          "name": "error_message",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Error message for error events",
+          "validators": []
+        },
+        {
+          "name": "line",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Line number for parse errors",
+          "validators": []
+        },
+        {
+          "name": "column",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Column number for parse errors",
+          "validators": []
+        },
+        {
+          "name": "watched_paths",
+          "type_ref": "list",
+          "required": false,
+          "default": "",
+          "description": "List of watched paths for watcher_ready events",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Additional context data",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Payload for system.* events"
+    },
+    {
+      "name": "SystemEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "EventId",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "Timestamp",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "type",
+          "type_ref": "EventType",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^system\\.",
+              "error_message": "Type must start with 'system.'"
+            }
+          ]
+        },
+        {
+          "name": "version",
+          "type_ref": "EventVersion",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "payload",
+          "type_ref": "SystemEventPayload",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "System lifecycle and infrastructure events"
+    },
+    {
+      "name": "Event",
+      "kind": "union",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "AgentEvent",
+        "PactEvent",
+        "TaskEvent",
+        "SystemEvent"
+      ],
+      "description": "Discriminated union of all event types"
+    },
+    {
+      "name": "EventPredicate",
+      "kind": "primitive",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Function type (event: Event) => boolean for filtering"
+    },
+    {
+      "name": "EventHandler",
+      "kind": "primitive",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Function type (event: Event) => void | Promise<void>"
+    },
+    {
+      "name": "UnsubscribeFn",
+      "kind": "primitive",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Function type () => void to unsubscribe from event bus"
+    },
+    {
+      "name": "SubscriptionId",
+      "kind": "primitive",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Branded string identifier for subscriptions"
+    },
+    {
+      "name": "EventBusState",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "active",
+        "destroying",
+        "destroyed"
+      ],
+      "inner_types": [],
+      "description": "Event bus lifecycle state"
+    },
+    {
+      "name": "FileWatcherState",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "initializing",
+        "ready",
+        "error",
+        "closed"
+      ],
+      "inner_types": [],
+      "description": "File watcher lifecycle state"
+    },
+    {
+      "name": "WatchOptions",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ignored",
+          "type_ref": "list",
+          "required": false,
+          "default": "",
+          "description": "Glob patterns to ignore (e.g., node_modules, .git)",
+          "validators": []
+        },
+        {
+          "name": "persistent",
+          "type_ref": "bool",
+          "required": false,
+          "default": "true",
+          "description": "Keep process running while watching",
+          "validators": []
+        },
+        {
+          "name": "ignoreInitial",
+          "type_ref": "bool",
+          "required": false,
+          "default": "true",
+          "description": "Ignore initial add events",
+          "validators": []
+        },
+        {
+          "name": "awaitWriteFinish",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Options for debouncing writes {stabilityThreshold: number, pollInterval: number}",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Options for filesystem watching"
+    },
+    {
+      "name": "SSEFilterParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by event type prefix (e.g., 'agent', 'pact.transition')",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-z]+([.][a-z_]+)?$",
+              "error_message": "Type must be lowercase alphanumeric with optional dot-separated suffix"
+            }
+          ]
+        },
+        {
+          "name": "project",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by project_id in payload",
+          "validators": []
+        },
+        {
+          "name": "agent",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by agent_id in payload",
+          "validators": []
+        },
+        {
+          "name": "lastEventId",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Resume from last received event ID",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Query parameters for SSE endpoint filtering"
+    },
+    {
+      "name": "PaginationParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "limit",
+          "type_ref": "int",
+          "required": false,
+          "default": "100",
+          "description": "",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..1000",
+              "error_message": "Limit must be between 1 and 1000"
+            }
+          ]
+        },
+        {
+          "name": "offset",
+          "type_ref": "int",
+          "required": false,
+          "default": "0",
+          "description": "",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..",
+              "error_message": "Offset must be non-negative"
+            }
+          ]
+        },
+        {
+          "name": "order",
+          "type_ref": "str",
+          "required": false,
+          "default": "desc",
+          "description": "",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^(asc|desc)$",
+              "error_message": "Order must be 'asc' or 'desc'"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Pagination parameters for event history queries"
+    },
+    {
+      "name": "EventFilters",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by event type prefix",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by project_id in payload",
+          "validators": []
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by agent_id in payload",
+          "validators": []
+        },
+        {
+          "name": "since",
+          "type_ref": "Timestamp",
+          "required": false,
+          "default": "",
+          "description": "Filter events after this timestamp",
+          "validators": []
+        },
+        {
+          "name": "until",
+          "type_ref": "Timestamp",
+          "required": false,
+          "default": "",
+          "description": "Filter events before this timestamp",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Filter criteria for event history queries"
+    },
+    {
+      "name": "EventBusConfig",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "HEARTBEAT_INTERVAL_MS",
+          "type_ref": "int",
+          "required": true,
+          "default": "30000",
+          "description": "SSE heartbeat interval (15000-30000ms)",
+          "validators": []
+        },
+        {
+          "name": "DEBOUNCE_MS",
+          "type_ref": "int",
+          "required": true,
+          "default": "200",
+          "description": "File watcher debounce delay (100-300ms)",
+          "validators": []
+        },
+        {
+          "name": "EVENT_RETENTION_DAYS",
+          "type_ref": "int",
+          "required": true,
+          "default": "30",
+          "description": "Days to retain events in database",
+          "validators": []
+        },
+        {
+          "name": "WATCHED_FILES",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Glob patterns for watched files",
+          "validators": []
+        },
+        {
+          "name": "IGNORED_PATTERNS",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Glob patterns to ignore when watching",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Configuration constants for event bus"
+    },
+    {
+      "name": "EventBusError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "cause",
+          "type_ref": "any",
+          "required": false,
+          "default": "",
+          "description": "Underlying error cause",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Base error for event bus operations"
+    },
+    {
+      "name": "WatcherError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "filePath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to file that caused error",
+          "validators": []
+        },
+        {
+          "name": "cause",
+          "type_ref": "any",
+          "required": false,
+          "default": "",
+          "description": "",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "File watcher error with file context"
+    },
+    {
+      "name": "ParseError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "filePath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to file that failed to parse",
+          "validators": []
+        },
+        {
+          "name": "line",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Line number of parse error",
+          "validators": []
+        },
+        {
+          "name": "column",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Column number of parse error",
+          "validators": []
+        },
+        {
+          "name": "cause",
+          "type_ref": "any",
+          "required": false,
+          "default": "",
+          "description": "",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "File parsing error with location context"
+    },
+    {
+      "name": "SubscriptionError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "subscriptionId",
+          "type_ref": "SubscriptionId",
+          "required": false,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "cause",
+          "type_ref": "any",
+          "required": false,
+          "default": "",
+          "description": "",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Subscription management error"
+    },
+    {
+      "name": "SerializationError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "path",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "JSON path to field that failed serialization",
+          "validators": []
+        },
+        {
+          "name": "cause",
+          "type_ref": "any",
+          "required": false,
+          "default": "",
+          "description": "",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Event serialization error with path to problematic field"
+    },
+    {
+      "name": "MockEventBus",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "emit",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Spy/stub for emit function",
+          "validators": []
+        },
+        {
+          "name": "subscribe",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Spy/stub for subscribe function",
+          "validators": []
+        },
+        {
+          "name": "unsubscribe",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Spy/stub for unsubscribe function",
+          "validators": []
+        },
+        {
+          "name": "destroy",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Spy/stub for destroy function",
+          "validators": []
+        },
+        {
+          "name": "state",
+          "type_ref": "EventBusState",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Mock event bus interface for testing"
+    },
+    {
+      "name": "MockFileWatcher",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "watch",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Spy/stub for watch function",
+          "validators": []
+        },
+        {
+          "name": "close",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Spy/stub for close function",
+          "validators": []
+        },
+        {
+          "name": "state",
+          "type_ref": "FileWatcherState",
+          "required": true,
+          "default": "",
+          "description": "",
+          "validators": []
+        },
+        {
+          "name": "triggerChange",
+          "type_ref": "any",
+          "required": false,
+          "default": "",
+          "description": "Test helper to simulate file changes",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Mock file watcher interface for testing"
+    }
+  ],
+  "functions": [
+    {
+      "name": "createEventBus",
+      "description": "Factory function to create a new EventBus instance. Returns an event bus with active state, empty subscription registry, and ready for emit/subscribe operations.",
+      "inputs": [
+        {
+          "name": "config",
+          "type_ref": "EventBusConfig",
+          "required": false,
+          "default": "",
+          "description": "Optional configuration overrides",
+          "validators": []
+        }
+      ],
+      "output_type": "any",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returned bus has state='active'",
+        "Subscription registry is empty",
+        "Bus is ready to accept emit/subscribe calls"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "EventBus instance",
+          "description": "Creates new in-memory event bus with subscription registry"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "emit",
+      "description": "Publish an event to the event bus. Synchronously notifies all matching subscribers based on their predicate filters. Does not throw on handler errors (logs instead). Non-blocking for persistence (fire-and-forget).",
+      "inputs": [
+        {
+          "name": "event",
+          "type_ref": "Event",
+          "required": true,
+          "default": "",
+          "description": "Event to publish (must have valid id, timestamp, type, version)",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [
+        {
+          "name": "BusDestroyed",
+          "condition": "Event bus state is 'destroyed' or 'destroying'",
+          "error_type": "EventBusError",
+          "error_data": {
+            "message": "Cannot emit event: bus is destroyed"
+          }
+        },
+        {
+          "name": "InvalidEvent",
+          "condition": "Event fails Zod schema validation",
+          "error_type": "EventBusError",
+          "error_data": {
+            "message": "Event failed validation",
+            "cause": "Zod validation error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Event bus state must be 'active'",
+        "Event must pass Zod schema validation",
+        "Event.id must be unique (generated via nanoid/uuid)",
+        "Event.timestamp must be valid ISO 8601",
+        "Event.version must equal 'v1'"
+      ],
+      "postconditions": [
+        "All matching subscribers have been invoked",
+        "Event persistence attempted (async, non-blocking)",
+        "Handler errors logged but do not propagate"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "Subscriber handlers",
+          "description": "Invokes all registered handlers matching event predicate"
+        },
+        {
+          "kind": "writes_file",
+          "target": "SQLite activity_events table",
+          "description": "Asynchronously persists event to database (non-blocking)"
+        },
+        {
+          "kind": "logging",
+          "target": "Error logs",
+          "description": "Logs handler errors and persistence failures"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 5,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n is number of subscribers"
+      }
+    },
+    {
+      "name": "subscribe",
+      "description": "Register an event handler with optional predicate filter. Returns unsubscribe function. Handler is invoked synchronously when matching events are emitted. Predicate defaults to (event) => true (match all).",
+      "inputs": [
+        {
+          "name": "predicate",
+          "type_ref": "EventPredicate",
+          "required": false,
+          "default": "",
+          "description": "Filter function to select events (defaults to match all)",
+          "validators": []
+        },
+        {
+          "name": "handler",
+          "type_ref": "EventHandler",
+          "required": true,
+          "default": "",
+          "description": "Callback invoked for matching events",
+          "validators": []
+        }
+      ],
+      "output_type": "UnsubscribeFn",
+      "error_cases": [
+        {
+          "name": "BusDestroyed",
+          "condition": "Event bus state is 'destroyed'",
+          "error_type": "SubscriptionError",
+          "error_data": {
+            "message": "Cannot subscribe: bus is destroyed"
+          }
+        },
+        {
+          "name": "InvalidHandler",
+          "condition": "Handler is not a function",
+          "error_type": "SubscriptionError",
+          "error_data": {
+            "message": "Handler must be a function"
+          }
+        }
+      ],
+      "preconditions": [
+        "Event bus state must be 'active'",
+        "Handler must be a function"
+      ],
+      "postconditions": [
+        "Subscription registered with unique SubscriptionId",
+        "Handler will be invoked for future matching events",
+        "Returned unsubscribe function removes this subscription when called"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "Subscription registry",
+          "description": "Adds new subscription entry"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "unsubscribe",
+      "description": "Remove a subscription by ID. Idempotent (safe to call multiple times). No-op if subscription ID not found.",
+      "inputs": [
+        {
+          "name": "subscriptionId",
+          "type_ref": "SubscriptionId",
+          "required": true,
+          "default": "",
+          "description": "Subscription identifier to remove",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Subscription removed from registry (if existed)",
+        "Handler will no longer be invoked for future events"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "Subscription registry",
+          "description": "Removes subscription entry if present"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "destroyEventBus",
+      "description": "Gracefully shutdown event bus. Unsubscribes all handlers, waits for in-flight handler executions (respecting AbortSignal), emits system.shutdown event, sets state to 'destroyed'. Idempotent.",
+      "inputs": [
+        {
+          "name": "signal",
+          "type_ref": "any",
+          "required": false,
+          "default": "",
+          "description": "Optional AbortSignal for timeout control",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [
+        {
+          "name": "DestroyAborted",
+          "condition": "AbortSignal is triggered during shutdown",
+          "error_type": "EventBusError",
+          "error_data": {
+            "message": "Event bus destruction aborted"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "State set to 'destroyed'",
+        "All subscriptions cleared",
+        "system.shutdown event emitted before clearing subscriptions",
+        "No future emit/subscribe operations allowed"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "EventBus instance",
+          "description": "Clears subscription registry and updates state to 'destroyed'"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1000,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n is number of active subscriptions"
+      }
+    },
+    {
+      "name": "getFileWatcher",
+      "description": "Singleton factory for FileWatcher. First call creates watcher with chokidar, subsequent calls return existing instance. Uses globalThis pattern for HMR safety in dev mode. Returns watcher in 'initializing' or 'ready' state.",
+      "inputs": [],
+      "output_type": "any",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "If first call: new FileWatcher created and stored in globalThis",
+        "If subsequent call: existing FileWatcher returned",
+        "Returned watcher state is 'initializing', 'ready', or 'error'",
+        "Only one watcher instance exists per process"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "globalThis singleton registry",
+          "description": "Creates and stores FileWatcher instance on first call"
+        },
+        {
+          "kind": "logging",
+          "target": "Initialization logs",
+          "description": "Logs watcher creation and state transitions"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "watch",
+      "description": "Start watching filesystem paths with chokidar. Synthesizes events from file changes (add/change/unlink), emits parse_error on malformed files, watcher_ready when initialization completes. Debounces file changes per DEBOUNCE_MS config. Idempotent (calling multiple times with same paths is safe).",
+      "inputs": [
+        {
+          "name": "paths",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of file/directory paths or glob patterns to watch",
+          "validators": []
+        },
+        {
+          "name": "options",
+          "type_ref": "WatchOptions",
+          "required": false,
+          "default": "",
+          "description": "Chokidar watch options (ignored patterns, debounce settings)",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [
+        {
+          "name": "WatcherClosed",
+          "condition": "FileWatcher state is 'closed'",
+          "error_type": "WatcherError",
+          "error_data": {
+            "message": "Cannot watch: watcher is closed",
+            "filePath": "<none>"
+          }
+        },
+        {
+          "name": "InvalidPath",
+          "condition": "Paths list is empty or contains invalid paths",
+          "error_type": "WatcherError",
+          "error_data": {
+            "message": "Invalid watch paths",
+            "filePath": "<invalid_path>"
+          }
+        },
+        {
+          "name": "ChokidarInitFailed",
+          "condition": "Chokidar fails to initialize (permissions, missing dirs)",
+          "error_type": "WatcherError",
+          "error_data": {
+            "message": "Chokidar initialization failed",
+            "filePath": "<path>",
+            "cause": "chokidar error"
+          }
+        }
+      ],
+      "preconditions": [
+        "FileWatcher state must not be 'closed'",
+        "Paths must be valid file system paths or globs"
+      ],
+      "postconditions": [
+        "Watcher state transitions to 'ready' on successful initialization",
+        "system.watcher_ready event emitted with watched_paths in payload",
+        "File change events debounced per DEBOUNCE_MS",
+        "Parse errors result in system.parse_error events (non-fatal)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "Filesystem paths specified in input",
+          "description": "Monitors files for changes using chokidar"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "FileWatcher internal state and EventBus",
+          "description": "Updates watcher state, emits events to bus on file changes"
+        },
+        {
+          "kind": "logging",
+          "target": "Watcher lifecycle logs",
+          "description": "Logs watch initialization, errors, and file change events"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "closeFileWatcher",
+      "description": "Shutdown file watcher and release chokidar resources. Stops all filesystem watching, emits no further events, sets state to 'closed'. Idempotent (safe to call multiple times).",
+      "inputs": [],
+      "output_type": "None",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Watcher state set to 'closed'",
+        "Chokidar instance closed and resources released",
+        "No further file change events emitted",
+        "Singleton can be re-initialized via getFileWatcher() after close"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "FileWatcher instance and chokidar",
+          "description": "Closes chokidar watchers and updates state to 'closed'"
+        },
+        {
+          "kind": "logging",
+          "target": "Shutdown logs",
+          "description": "Logs watcher closure"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 500,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "handleSSERequest",
+      "description": "Next.js Route Handler for GET /api/events. Validates query params with Zod, creates SSE stream (text/event-stream), subscribes to event bus with filters, sends events in SSE format (id:/event:/data:/retry:), emits heartbeat per HEARTBEAT_INTERVAL_MS, handles client disconnect cleanup, supports Last-Event-ID header for reconnection.",
+      "inputs": [
+        {
+          "name": "request",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Next.js Request object with query params",
+          "validators": []
+        }
+      ],
+      "output_type": "any",
+      "error_cases": [
+        {
+          "name": "InvalidQueryParams",
+          "condition": "Query params fail Zod SSEFilterParams validation",
+          "error_type": "EventBusError",
+          "error_data": {
+            "status": "400",
+            "message": "Invalid filter parameters"
+          }
+        },
+        {
+          "name": "MethodNotAllowed",
+          "condition": "Request method is not GET",
+          "error_type": "EventBusError",
+          "error_data": {
+            "status": "405",
+            "message": "Method not allowed"
+          }
+        },
+        {
+          "name": "EventBusUnavailable",
+          "condition": "Event bus is not active or destroyed",
+          "error_type": "EventBusError",
+          "error_data": {
+            "status": "503",
+            "message": "Event bus unavailable"
+          }
+        }
+      ],
+      "preconditions": [
+        "Request method is GET",
+        "Event bus is active and ready",
+        "Query params validate against SSEFilterParams schema"
+      ],
+      "postconditions": [
+        "Returns Response with headers: Content-Type: text/event-stream, Cache-Control: no-cache, Connection: keep-alive",
+        "system.connection_opened event emitted with new ConnectionId",
+        "Client receives filtered events in SSE format",
+        "Heartbeat events sent every HEARTBEAT_INTERVAL_MS",
+        "Subscription cleaned up on client disconnect",
+        "If lastEventId provided: resume from that event (fetch from persistence layer)"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "SSE stream to client",
+          "description": "Streams events over HTTP as text/event-stream"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "EventBus subscriptions",
+          "description": "Subscribes to event bus during connection lifecycle"
+        },
+        {
+          "kind": "reads_file",
+          "target": "SQLite activity_events table",
+          "description": "Reads historical events if lastEventId provided"
+        },
+        {
+          "kind": "logging",
+          "target": "Connection lifecycle logs",
+          "description": "Logs connection open/close and errors"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": "O(1) per event emission"
+      }
+    },
+    {
+      "name": "persistEvent",
+      "description": "Asynchronously persist event to SQLite activity_events table. Called non-blocking from emit(). Uses Promise.allSettled pattern to avoid blocking event propagation. Logs errors but does not throw.",
+      "inputs": [
+        {
+          "name": "event",
+          "type_ref": "Event",
+          "required": true,
+          "default": "",
+          "description": "Event to persist",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [
+        {
+          "name": "SerializationFailed",
+          "condition": "Event payload cannot be serialized to JSON (circular refs, BigInt without toJSON)",
+          "error_type": "SerializationError",
+          "error_data": {
+            "message": "Failed to serialize event",
+            "path": "payload.someField"
+          }
+        },
+        {
+          "name": "DatabaseWriteFailed",
+          "condition": "SQLite insert fails (disk full, constraint violation)",
+          "error_type": "EventBusError",
+          "error_data": {
+            "message": "Database write failed",
+            "cause": "sqlite error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Event must be valid (already validated in emit)",
+        "SQLite database connection available"
+      ],
+      "postconditions": [
+        "Event inserted into activity_events table (id, timestamp, type, payload JSON)",
+        "Old events beyond EVENT_RETENTION_DAYS pruned (async cleanup)",
+        "Errors logged but do not propagate to caller"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "SQLite activity_events table",
+          "description": "Inserts event record and prunes old events"
+        },
+        {
+          "kind": "logging",
+          "target": "Persistence error logs",
+          "description": "Logs serialization or database errors"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 10,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "getEvents",
+      "description": "Query event history from SQLite activity_events table with filters and pagination. Returns events matching type/project/agent/time filters, ordered by timestamp, limited per pagination params. Used for /api/events/history and SSE reconnection (lastEventId).",
+      "inputs": [
+        {
+          "name": "filters",
+          "type_ref": "EventFilters",
+          "required": false,
+          "default": "",
+          "description": "Filter criteria (type prefix, project/agent IDs, time range)",
+          "validators": []
+        },
+        {
+          "name": "pagination",
+          "type_ref": "PaginationParams",
+          "required": false,
+          "default": "",
+          "description": "Limit, offset, order (defaults: limit=100, offset=0, order=desc)",
+          "validators": []
+        }
+      ],
+      "output_type": "list",
+      "error_cases": [
+        {
+          "name": "InvalidFilters",
+          "condition": "Filters fail EventFilters schema validation",
+          "error_type": "EventBusError",
+          "error_data": {
+            "message": "Invalid event filters"
+          }
+        },
+        {
+          "name": "DatabaseReadFailed",
+          "condition": "SQLite query fails (corrupted db, permissions)",
+          "error_type": "EventBusError",
+          "error_data": {
+            "message": "Database read failed",
+            "cause": "sqlite error"
+          }
+        },
+        {
+          "name": "DeserializationFailed",
+          "condition": "Stored JSON payload cannot be parsed back to Event",
+          "error_type": "SerializationError",
+          "error_data": {
+            "message": "Failed to deserialize event from database"
+          }
+        }
+      ],
+      "preconditions": [
+        "Filters validated against EventFilters schema",
+        "Pagination validated against PaginationParams schema",
+        "SQLite database connection available"
+      ],
+      "postconditions": [
+        "Returns list of Event objects matching filters",
+        "Events ordered by timestamp per pagination.order",
+        "Result limited per pagination.limit",
+        "Empty list if no matches"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite activity_events table",
+          "description": "Queries events with WHERE clauses and LIMIT/OFFSET"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": 50,
+        "complexity": "O(n) where n is result set size (bounded by limit)"
+      }
+    },
+    {
+      "name": "serializeEvent",
+      "description": "Convert Event object to SSE-compatible JSON string. Handles special types: BigInt (via toJSON or string conversion), Date (ISO 8601), Error (message + stack). Detects circular references and throws SerializationError with path to problematic field.",
+      "inputs": [
+        {
+          "name": "event",
+          "type_ref": "Event",
+          "required": true,
+          "default": "",
+          "description": "Event to serialize",
+          "validators": []
+        }
+      ],
+      "output_type": "str",
+      "error_cases": [
+        {
+          "name": "CircularReference",
+          "condition": "Event payload contains circular references",
+          "error_type": "SerializationError",
+          "error_data": {
+            "message": "Circular reference detected",
+            "path": "payload.metadata.circularField"
+          }
+        },
+        {
+          "name": "UnsupportedType",
+          "condition": "Event payload contains non-serializable type (Symbol, Function)",
+          "error_type": "SerializationError",
+          "error_data": {
+            "message": "Unsupported type in event payload",
+            "path": "payload.someField"
+          }
+        }
+      ],
+      "preconditions": [
+        "Event is a valid Event object (validated by Zod)"
+      ],
+      "postconditions": [
+        "Returns valid JSON string",
+        "BigInt fields converted to string or toJSON result",
+        "Date fields converted to ISO 8601 strings",
+        "Error fields converted to {message, stack} objects"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 2,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n is payload size"
+      }
+    },
+    {
+      "name": "parseEventId",
+      "description": "Parse Last-Event-ID header value into EventId. Validates format (nanoid or UUID), returns null if invalid. Used for SSE reconnection to resume from last received event.",
+      "inputs": [
+        {
+          "name": "lastEventId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Last-Event-ID header value from SSE client",
+          "validators": []
+        }
+      ],
+      "output_type": "EventId",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returns EventId if valid format",
+        "Returns null if invalid or empty string"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "createEventPredicate",
+      "description": "Factory to create EventPredicate filter functions from SSEFilterParams. Builds predicate that checks event.type prefix, payload.project_id, payload.agent_id. Used by SSE endpoint to convert query params to subscription filter.",
+      "inputs": [
+        {
+          "name": "filterParams",
+          "type_ref": "SSEFilterParams",
+          "required": true,
+          "default": "",
+          "description": "Validated filter parameters from query string",
+          "validators": []
+        }
+      ],
+      "output_type": "EventPredicate",
+      "error_cases": [],
+      "preconditions": [
+        "filterParams validated against SSEFilterParams schema"
+      ],
+      "postconditions": [
+        "Returns function (event: Event) => boolean",
+        "Returned predicate checks event.type starts with filterParams.type (if provided)",
+        "Returned predicate checks payload.project_id === filterParams.project (if provided)",
+        "Returned predicate checks payload.agent_id === filterParams.agent (if provided)",
+        "All filters are AND-combined"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "testSSEConnection",
+      "description": "Integration test helper that verifies SSE endpoint connectivity. Creates EventSource client, subscribes to /api/events, waits for system.connection_opened event, then disconnects. Returns true if connection successful, false otherwise. Used for health checks (AC6).",
+      "inputs": [
+        {
+          "name": "baseUrl",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Base URL of Next.js app (e.g., http://localhost:3000)",
+          "validators": []
+        },
+        {
+          "name": "timeoutMs",
+          "type_ref": "int",
+          "required": false,
+          "default": "5000",
+          "description": "Connection timeout in milliseconds",
+          "validators": []
+        }
+      ],
+      "output_type": "bool",
+      "error_cases": [
+        {
+          "name": "ConnectionTimeout",
+          "condition": "No connection_opened event received within timeoutMs",
+          "error_type": "EventBusError",
+          "error_data": {
+            "message": "SSE connection test timed out"
+          }
+        },
+        {
+          "name": "ConnectionFailed",
+          "condition": "EventSource reports error event",
+          "error_type": "EventBusError",
+          "error_data": {
+            "message": "SSE connection failed",
+            "cause": "EventSource error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Next.js app is running and serving /api/events",
+        "Event bus is active"
+      ],
+      "postconditions": [
+        "Returns true if connection_opened event received within timeout",
+        "Returns false if timeout or connection error",
+        "EventSource connection closed after test"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "/api/events SSE endpoint",
+          "description": "Creates SSE client connection for testing"
+        },
+        {
+          "kind": "logging",
+          "target": "Test logs",
+          "description": "Logs connection test results"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1000,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    }
+  ],
+  "dependencies": [],
+  "dependency_contracts": {},
+  "invariants": [
+    "Event IDs are unique within the system (enforced by nanoid/uuid)",
+    "All events have version='v1' (schema versioning for future evolution)",
+    "Event bus state transitions: active -> destroying -> destroyed (one-way)",
+    "FileWatcher state transitions: initializing -> ready|error, any -> closed",
+    "Only one FileWatcher instance exists per process (singleton via globalThis)",
+    "Event timestamps are strictly increasing within a single emit sequence",
+    "Subscription handlers never block emit() (async handlers run in background)",
+    "SSE connections emit exactly one connection_opened event per lifecycle",
+    "Persisted events older than EVENT_RETENTION_DAYS are automatically pruned",
+    "Event bus emit() never throws (errors logged, persistence non-blocking)",
+    "File watcher errors emit system.watcher_error events (never crash process)",
+    "Parse errors emit system.parse_error events with file path context",
+    "SSE heartbeat ensures connection liveness within 2*HEARTBEAT_INTERVAL_MS",
+    "All Event payloads are JSON-serializable (no circular refs, Functions, Symbols)",
+    "EventPredicate filters are pure functions (no side effects, deterministic)"
+  ],
+  "requires": [
+    "chokidar ^3.x for filesystem watching with debouncing",
+    "better-sqlite3 for synchronous SQLite access",
+    "zod for runtime schema validation (Event types, SSEFilterParams, etc.)",
+    "nanoid or uuid for generating EventId and ConnectionId",
+    "Next.js Route Handler types (Request, Response) for /api/events endpoint",
+    "Node.js fs/promises for file reading in parse error paths",
+    "AbortSignal for graceful shutdown timeout control",
+    "EventSource polyfill for testSSEConnection in Node.js environment"
+  ],
+  "processing_register": "pragmatic-implementation"
+}

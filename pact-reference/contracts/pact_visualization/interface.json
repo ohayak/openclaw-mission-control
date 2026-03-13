@@ -1,0 +1,1895 @@
+{
+  "component_id": "pact_visualization",
+  "name": "PACT Pipeline & Health Visualization",
+  "description": "Components and pages for PACT-specific views. Pipeline visualization (embedded in project detail for PACT projects): horizontal stepper showing 8 phases (Interview→Shape→Decompose→Contract→Test→Implement→Integrate→Polish) with current phase highlighted, derived from PACT directory state. Collapsible component tree (max 3 levels) showing per-component contract status and test pass/fail. PACT Health dashboard page: computes and displays output/planning ratio, rejection rate, budget velocity, phase balance, cascade detection from raw PACT file state. Each metric has documented computation logic in code comments and shows 'insufficient data' placeholder when data is unavailable (AC17). Uses recharts for any health metric charts.",
+  "version": 1,
+  "types": [
+    {
+      "name": "Phase",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "Interview",
+        "Shape",
+        "Decompose",
+        "Contract",
+        "Test",
+        "Implement",
+        "Integrate",
+        "Polish"
+      ],
+      "inner_types": [],
+      "description": "Eight PACT pipeline phases in strict order"
+    },
+    {
+      "name": "PhaseStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "pending",
+        "active",
+        "completed",
+        "error",
+        "skipped"
+      ],
+      "inner_types": [],
+      "description": "Execution status of a single phase"
+    },
+    {
+      "name": "PhaseMetadata",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "start_time",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Unix timestamp when phase started",
+          "validators": []
+        },
+        {
+          "name": "end_time",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Unix timestamp when phase ended",
+          "validators": []
+        },
+        {
+          "name": "error_message",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Error details if status is error",
+          "validators": []
+        },
+        {
+          "name": "artifacts_count",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Number of artifacts produced in this phase",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Optional metadata for a phase step"
+    },
+    {
+      "name": "PhaseStep",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique identifier for this step (phase name lowercased)",
+          "validators": []
+        },
+        {
+          "name": "label",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Display label for the phase",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "PhaseStatus",
+          "required": true,
+          "default": "",
+          "description": "Current execution status",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "PhaseMetadata",
+          "required": false,
+          "default": "",
+          "description": "Additional phase metadata",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single step in the pipeline visualization"
+    },
+    {
+      "name": "ContractStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "draft",
+        "defined",
+        "passed",
+        "failed",
+        "skipped",
+        "unknown"
+      ],
+      "inner_types": [],
+      "description": "Status of a component contract definition and validation"
+    },
+    {
+      "name": "ComponentContractData",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "component_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique component identifier",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable component name",
+          "validators": []
+        },
+        {
+          "name": "contract_status",
+          "type_ref": "ContractStatus",
+          "required": true,
+          "default": "",
+          "description": "Contract definition status",
+          "validators": []
+        },
+        {
+          "name": "test_status",
+          "type_ref": "ContractStatus",
+          "required": true,
+          "default": "",
+          "description": "Contract test validation status",
+          "validators": []
+        },
+        {
+          "name": "test_count",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Total number of tests",
+          "validators": []
+        },
+        {
+          "name": "passed_tests",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Number of passed tests",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Contract and test status for a single component"
+    },
+    {
+      "name": "TreeNode",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "data",
+          "type_ref": "ComponentContractData",
+          "required": true,
+          "default": "",
+          "description": "Component data at this node",
+          "validators": []
+        },
+        {
+          "name": "children",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Child nodes (recursive TreeNode list)",
+          "validators": []
+        },
+        {
+          "name": "depth",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Current depth level (0-indexed, max 2)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Recursive tree node structure for component hierarchy. Max 3 levels enforced at parse time."
+    },
+    {
+      "name": "Ratio",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "value",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Numeric ratio value",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Branded type for ratio values (0.0 to infinity, unbounded)"
+    },
+    {
+      "name": "Percentage",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "value",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Percentage value between 0 and 100",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Branded type for percentage values (0.0 to 100.0)"
+    },
+    {
+      "name": "ComputedMetric",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "status",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Must be 'computed'",
+          "validators": []
+        },
+        {
+          "name": "value",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Computed metric value",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Successfully computed metric value"
+    },
+    {
+      "name": "InsufficientDataMetric",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "status",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Must be 'insufficient'",
+          "validators": []
+        },
+        {
+          "name": "reason",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable explanation of missing data",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Metric could not be computed due to insufficient data"
+    },
+    {
+      "name": "ErrorMetric",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "status",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Must be 'error'",
+          "validators": []
+        },
+        {
+          "name": "error",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Error message",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Metric computation failed with error"
+    },
+    {
+      "name": "HealthMetricResult",
+      "kind": "union",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "ComputedMetric",
+        "InsufficientDataMetric",
+        "ErrorMetric"
+      ],
+      "description": "Discriminated union for health metric computation results"
+    },
+    {
+      "name": "MetricSnapshot",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "timestamp",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Unix timestamp in milliseconds",
+          "validators": []
+        },
+        {
+          "name": "value",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Metric value at this timestamp",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Single timestamped metric value for time-series data"
+    },
+    {
+      "name": "MetricHistory",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "metric_name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Name of the metric being tracked",
+          "validators": []
+        },
+        {
+          "name": "snapshots",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Ordered list of metric snapshots",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Time-series history of a metric"
+    },
+    {
+      "name": "RechartDataPoint",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "X-axis label (e.g., timestamp formatted as string)",
+          "validators": []
+        },
+        {
+          "name": "metric1",
+          "type_ref": "float",
+          "required": false,
+          "default": "",
+          "description": "First metric value (null if unavailable)",
+          "validators": []
+        },
+        {
+          "name": "metric2",
+          "type_ref": "float",
+          "required": false,
+          "default": "",
+          "description": "Second metric value (null if unavailable)",
+          "validators": []
+        },
+        {
+          "name": "metric3",
+          "type_ref": "float",
+          "required": false,
+          "default": "",
+          "description": "Third metric value (null if unavailable)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Recharts-compatible data point format"
+    },
+    {
+      "name": "ParseError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "file_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to file that failed to parse",
+          "validators": []
+        },
+        {
+          "name": "error_type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Category of error (e.g., 'malformed_json', 'missing_field')",
+          "validators": []
+        },
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Detailed error message",
+          "validators": []
+        },
+        {
+          "name": "line_number",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Line number where error occurred if applicable",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Error encountered during file parsing"
+    },
+    {
+      "name": "OkResult",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ok",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Must be true",
+          "validators": []
+        },
+        {
+          "name": "value",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Parsed data value",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Success result wrapper"
+    },
+    {
+      "name": "ErrResult",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ok",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Must be false",
+          "validators": []
+        },
+        {
+          "name": "error",
+          "type_ref": "ParseError",
+          "required": true,
+          "default": "",
+          "description": "Parse error details",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Error result wrapper"
+    },
+    {
+      "name": "Result",
+      "kind": "union",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "OkResult",
+        "ErrResult"
+      ],
+      "description": "Result type for file parsing operations"
+    },
+    {
+      "name": "RawPactData",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "phase_files",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Map of phase name to file content (JSON string)",
+          "validators": []
+        },
+        {
+          "name": "component_files",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of component contract file paths",
+          "validators": []
+        },
+        {
+          "name": "session_log",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Raw session log content",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Additional metadata (timestamps, version, etc.)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Raw unvalidated data read from PACT directory files"
+    },
+    {
+      "name": "ConfidentPhaseDetection",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "result_type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Must be 'confident'",
+          "validators": []
+        },
+        {
+          "name": "phase",
+          "type_ref": "Phase",
+          "required": true,
+          "default": "",
+          "description": "Detected phase",
+          "validators": []
+        },
+        {
+          "name": "confidence",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Confidence level: 'high' or 'medium'",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Confident phase detection result"
+    },
+    {
+      "name": "AmbiguousPhaseDetection",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "result_type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Must be 'ambiguous'",
+          "validators": []
+        },
+        {
+          "name": "candidates",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of candidate phases",
+          "validators": []
+        },
+        {
+          "name": "reason",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Explanation of ambiguity",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Ambiguous phase detection result (multiple candidates)"
+    },
+    {
+      "name": "PhaseDetectionResult",
+      "kind": "union",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "ConfidentPhaseDetection",
+        "AmbiguousPhaseDetection"
+      ],
+      "description": "Result of phase detection from PACT state"
+    },
+    {
+      "name": "PactPhaseChangeEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Must be 'pact:phase-change'",
+          "validators": []
+        },
+        {
+          "name": "version",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Event schema version (1)",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project identifier",
+          "validators": []
+        },
+        {
+          "name": "old_phase",
+          "type_ref": "Phase",
+          "required": false,
+          "default": "",
+          "description": "Previous phase (null if first phase)",
+          "validators": []
+        },
+        {
+          "name": "new_phase",
+          "type_ref": "Phase",
+          "required": true,
+          "default": "",
+          "description": "Current phase",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Unix timestamp in milliseconds",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "SSE event for phase transitions"
+    },
+    {
+      "name": "PactHealthUpdateEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Must be 'pact:health-update'",
+          "validators": []
+        },
+        {
+          "name": "version",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Event schema version (1)",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project identifier",
+          "validators": []
+        },
+        {
+          "name": "metric_name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Name of updated metric",
+          "validators": []
+        },
+        {
+          "name": "delta",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Delta payload with changed values only",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Unix timestamp in milliseconds",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "SSE event for health metric updates"
+    },
+    {
+      "name": "ExpansionState",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "expanded_ids",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Set of expanded component IDs",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "UI expansion state for component tree"
+    },
+    {
+      "name": "HealthMetrics",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "output_planning_ratio",
+          "type_ref": "HealthMetricResult",
+          "required": true,
+          "default": "",
+          "description": "Ratio of output tokens to planning tokens",
+          "validators": []
+        },
+        {
+          "name": "rejection_rate",
+          "type_ref": "HealthMetricResult",
+          "required": true,
+          "default": "",
+          "description": "Percentage of rejected artifacts",
+          "validators": []
+        },
+        {
+          "name": "budget_velocity",
+          "type_ref": "HealthMetricResult",
+          "required": true,
+          "default": "",
+          "description": "Token spend per unit time",
+          "validators": []
+        },
+        {
+          "name": "phase_balance",
+          "type_ref": "HealthMetricResult",
+          "required": true,
+          "default": "",
+          "description": "Distribution balance across phases",
+          "validators": []
+        },
+        {
+          "name": "cascade_detection",
+          "type_ref": "HealthMetricResult",
+          "required": true,
+          "default": "",
+          "description": "Detected cascading failures score",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Collection of all computed health metrics"
+    },
+    {
+      "name": "PipelineState",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "steps",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Ordered list of all 8 phase steps",
+          "validators": []
+        },
+        {
+          "name": "current_phase",
+          "type_ref": "Phase",
+          "required": false,
+          "default": "",
+          "description": "Currently active phase (null if not started)",
+          "validators": []
+        },
+        {
+          "name": "component_tree",
+          "type_ref": "TreeNode",
+          "required": false,
+          "default": "",
+          "description": "Component hierarchy tree (null if no components)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Complete state of PACT pipeline for visualization"
+    }
+  ],
+  "functions": [
+    {
+      "name": "parse_pact_directory",
+      "description": "Parse all PACT files from a project directory into raw unvalidated data. Never throws on malformed files; returns Result with parse errors.",
+      "inputs": [
+        {
+          "name": "directory_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to PACT project directory",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "DirectoryNotFound",
+          "condition": "directory_path does not exist",
+          "error_type": "ParseError",
+          "error_data": {}
+        },
+        {
+          "name": "PermissionDenied",
+          "condition": "insufficient permissions to read directory",
+          "error_type": "ParseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "directory_path is a valid filesystem path"
+      ],
+      "postconditions": [
+        "Returns Ok(RawPactData) if directory readable",
+        "Returns Err(ParseError) if directory missing or unreadable",
+        "Never throws exceptions"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "PACT directory files",
+          "description": "Reads phase files, component contracts, session logs"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "validate_raw_pact_data",
+      "description": "Validate raw PACT data using Zod schemas. Transforms unvalidated data into typed domain objects.",
+      "inputs": [
+        {
+          "name": "raw_data",
+          "type_ref": "RawPactData",
+          "required": true,
+          "default": "",
+          "description": "Raw unvalidated PACT data",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "SchemaValidationFailure",
+          "condition": "data does not match expected Zod schema",
+          "error_type": "ParseError",
+          "error_data": {}
+        },
+        {
+          "name": "MissingRequiredField",
+          "condition": "required field is missing from raw data",
+          "error_type": "ParseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "raw_data contains at least phase_files and metadata keys"
+      ],
+      "postconditions": [
+        "Returns Ok with validated data structure",
+        "Returns Err with validation errors if schema mismatch"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "detect_current_phase",
+      "description": "Detect the current PACT phase from validated directory state using documented heuristics. Returns confident result with high/medium confidence, or ambiguous result with candidate phases.",
+      "inputs": [
+        {
+          "name": "validated_data",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Validated PACT data from validation step",
+          "validators": []
+        }
+      ],
+      "output_type": "PhaseDetectionResult",
+      "error_cases": [],
+      "preconditions": [
+        "validated_data passed Zod schema validation"
+      ],
+      "postconditions": [
+        "Returns ConfidentPhaseDetection if clear phase indicators present",
+        "Returns AmbiguousPhaseDetection if multiple phases equally likely",
+        "Confidence level documented in heuristic comments"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 20,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "build_pipeline_state",
+      "description": "Build complete pipeline visualization state from validated data and phase detection result. Generates all 8 PhaseStep objects with correct status.",
+      "inputs": [
+        {
+          "name": "validated_data",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Validated PACT data",
+          "validators": []
+        },
+        {
+          "name": "phase_detection",
+          "type_ref": "PhaseDetectionResult",
+          "required": true,
+          "default": "",
+          "description": "Phase detection result",
+          "validators": []
+        }
+      ],
+      "output_type": "PipelineState",
+      "error_cases": [],
+      "preconditions": [
+        "validated_data is valid",
+        "phase_detection is valid PhaseDetectionResult"
+      ],
+      "postconditions": [
+        "Returns PipelineState with exactly 8 PhaseStep objects",
+        "Steps ordered Interview→Polish",
+        "Current phase marked as 'active' status",
+        "Completed phases marked 'completed'",
+        "Future phases marked 'pending'"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 10,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "parse_component_tree",
+      "description": "Parse component hierarchy from validated data into recursive TreeNode structure. Enforces max depth of 3 levels at parse time with runtime guards.",
+      "inputs": [
+        {
+          "name": "validated_data",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Validated PACT data containing component files",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "MaxDepthExceeded",
+          "condition": "component tree exceeds 3 levels",
+          "error_type": "ParseError",
+          "error_data": {}
+        },
+        {
+          "name": "InvalidComponentData",
+          "condition": "component data does not match expected schema",
+          "error_type": "ParseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "validated_data contains component_files"
+      ],
+      "postconditions": [
+        "Returns Ok(TreeNode) if parsing succeeds",
+        "All nodes have depth <= 2 (0-indexed, max 3 levels)",
+        "Returns Err if max depth exceeded",
+        "Returns Err if malformed component data"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "validate_tree_depth",
+      "description": "Runtime guard to validate that a TreeNode structure does not exceed max depth of 3 levels.",
+      "inputs": [
+        {
+          "name": "tree",
+          "type_ref": "TreeNode",
+          "required": true,
+          "default": "",
+          "description": "Tree node to validate",
+          "validators": []
+        },
+        {
+          "name": "max_depth",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Maximum allowed depth (0-indexed)",
+          "validators": []
+        }
+      ],
+      "output_type": "bool",
+      "error_cases": [],
+      "preconditions": [
+        "max_depth >= 0"
+      ],
+      "postconditions": [
+        "Returns true if all nodes have depth <= max_depth",
+        "Returns false if any node exceeds max_depth"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "compute_output_planning_ratio",
+      "description": "Compute output/planning token ratio from session data. Returns HealthMetricResult (computed/insufficient/error). Documented computation: output_tokens / planning_tokens.",
+      "inputs": [
+        {
+          "name": "session_data",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Session data containing token counts",
+          "validators": []
+        }
+      ],
+      "output_type": "HealthMetricResult",
+      "error_cases": [],
+      "preconditions": [
+        "session_data is validated"
+      ],
+      "postconditions": [
+        "Returns ComputedMetric with Ratio if both token counts available and planning_tokens > 0",
+        "Returns InsufficientDataMetric if token counts missing",
+        "Returns ErrorMetric if planning_tokens = 0 (division by zero)"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 5,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "compute_rejection_rate",
+      "description": "Compute artifact rejection rate as percentage. Returns HealthMetricResult. Documented computation: (rejected_count / total_artifacts) * 100.",
+      "inputs": [
+        {
+          "name": "artifact_data",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Artifact tracking data",
+          "validators": []
+        }
+      ],
+      "output_type": "HealthMetricResult",
+      "error_cases": [],
+      "preconditions": [
+        "artifact_data is validated"
+      ],
+      "postconditions": [
+        "Returns ComputedMetric with Percentage if artifact counts available",
+        "Returns InsufficientDataMetric if no artifacts tracked",
+        "Percentage value in range [0, 100]"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 5,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "compute_budget_velocity",
+      "description": "Compute token spend velocity (tokens per hour). Returns HealthMetricResult. Documented computation: total_tokens / elapsed_hours.",
+      "inputs": [
+        {
+          "name": "session_data",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Session data with token usage and timestamps",
+          "validators": []
+        }
+      ],
+      "output_type": "HealthMetricResult",
+      "error_cases": [],
+      "preconditions": [
+        "session_data contains timestamps and token counts"
+      ],
+      "postconditions": [
+        "Returns ComputedMetric if session has elapsed time > 0",
+        "Returns InsufficientDataMetric if session too short or no tokens",
+        "Returns ErrorMetric if elapsed_time <= 0"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 5,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "compute_phase_balance",
+      "description": "Compute phase distribution balance score. Returns HealthMetricResult. Documented computation: Shannon entropy or coefficient of variation across phase durations.",
+      "inputs": [
+        {
+          "name": "phase_history",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of completed phase durations",
+          "validators": []
+        }
+      ],
+      "output_type": "HealthMetricResult",
+      "error_cases": [],
+      "preconditions": [
+        "phase_history is list of numeric durations"
+      ],
+      "postconditions": [
+        "Returns ComputedMetric if at least 2 phases completed",
+        "Returns InsufficientDataMetric if < 2 phases completed",
+        "Score normalized to [0, 1] where 1 = perfectly balanced"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 10,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "detect_cascades",
+      "description": "Detect cascading failures in phase transitions. Returns HealthMetricResult with cascade score. Documented computation: count of phase reversions or re-entry patterns.",
+      "inputs": [
+        {
+          "name": "phase_transition_log",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Ordered list of phase transitions with timestamps",
+          "validators": []
+        }
+      ],
+      "output_type": "HealthMetricResult",
+      "error_cases": [],
+      "preconditions": [
+        "phase_transition_log is ordered by timestamp"
+      ],
+      "postconditions": [
+        "Returns ComputedMetric with cascade count if transitions available",
+        "Returns InsufficientDataMetric if < 3 transitions",
+        "Score >= 0 where 0 = no cascades"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 20,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "compute_all_health_metrics",
+      "description": "Compute all health metrics in one pass. Returns HealthMetrics struct with all metric results.",
+      "inputs": [
+        {
+          "name": "validated_data",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Complete validated PACT data",
+          "validators": []
+        }
+      ],
+      "output_type": "HealthMetrics",
+      "error_cases": [],
+      "preconditions": [
+        "validated_data passed schema validation"
+      ],
+      "postconditions": [
+        "Returns HealthMetrics with all 5 metric results",
+        "Each metric is either ComputedMetric, InsufficientDataMetric, or ErrorMetric"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "transform_to_recharts",
+      "description": "Transform domain metric history to recharts-compatible data point array. Pure transformer function.",
+      "inputs": [
+        {
+          "name": "metric_history",
+          "type_ref": "MetricHistory",
+          "required": true,
+          "default": "",
+          "description": "Time-series metric data",
+          "validators": []
+        },
+        {
+          "name": "format_timestamp",
+          "type_ref": "bool",
+          "required": false,
+          "default": "",
+          "description": "Whether to format timestamps as readable strings (default true)",
+          "validators": []
+        }
+      ],
+      "output_type": "list",
+      "error_cases": [],
+      "preconditions": [
+        "metric_history.snapshots is ordered by timestamp"
+      ],
+      "postconditions": [
+        "Returns list of RechartDataPoint objects",
+        "name field contains formatted timestamp or raw value",
+        "metric1 field contains snapshot value",
+        "Array length equals snapshots length"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 30,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "transform_multi_metric_to_recharts",
+      "description": "Transform multiple metric histories into single recharts dataset with aligned timestamps. Handles missing data points as null.",
+      "inputs": [
+        {
+          "name": "metric_histories",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of MetricHistory objects to merge",
+          "validators": []
+        }
+      ],
+      "output_type": "list",
+      "error_cases": [
+        {
+          "name": "TooManyMetrics",
+          "condition": "more than 3 metric histories provided",
+          "error_type": "ValueError",
+          "error_data": {
+            "max_metrics": "3"
+          }
+        }
+      ],
+      "preconditions": [
+        "All metric_histories have non-empty snapshots"
+      ],
+      "postconditions": [
+        "Returns list of RechartDataPoint with up to 3 metrics per point",
+        "Timestamps aligned across all metrics",
+        "Missing values set to null",
+        "Array sorted by timestamp ascending"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": "O(n * m)"
+      }
+    },
+    {
+      "name": "validate_metric_range",
+      "description": "Validate that a metric value is within expected range based on metric type (Ratio unbounded, Percentage 0-100).",
+      "inputs": [
+        {
+          "name": "metric_type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Type of metric: 'ratio' or 'percentage'",
+          "validators": []
+        },
+        {
+          "name": "value",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Metric value to validate",
+          "validators": []
+        }
+      ],
+      "output_type": "bool",
+      "error_cases": [],
+      "preconditions": [
+        "metric_type is 'ratio' or 'percentage'"
+      ],
+      "postconditions": [
+        "Returns true if value is valid for metric_type",
+        "Returns false otherwise"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "create_expansion_state",
+      "description": "Create initial expansion state for component tree UI. Returns ExpansionState with default settings.",
+      "inputs": [
+        {
+          "name": "tree",
+          "type_ref": "TreeNode",
+          "required": true,
+          "default": "",
+          "description": "Component tree to initialize state for",
+          "validators": []
+        },
+        {
+          "name": "expand_all",
+          "type_ref": "bool",
+          "required": false,
+          "default": "",
+          "description": "Whether to expand all nodes initially (default false)",
+          "validators": []
+        }
+      ],
+      "output_type": "ExpansionState",
+      "error_cases": [],
+      "preconditions": [
+        "tree is valid TreeNode"
+      ],
+      "postconditions": [
+        "Returns ExpansionState with expanded_ids populated",
+        "If expand_all=true, all component IDs in expanded_ids",
+        "If expand_all=false, only root expanded"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "toggle_node_expansion",
+      "description": "Toggle expansion state for a specific tree node. Pure function returning new ExpansionState.",
+      "inputs": [
+        {
+          "name": "current_state",
+          "type_ref": "ExpansionState",
+          "required": true,
+          "default": "",
+          "description": "Current expansion state",
+          "validators": []
+        },
+        {
+          "name": "node_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Component ID to toggle",
+          "validators": []
+        }
+      ],
+      "output_type": "ExpansionState",
+      "error_cases": [],
+      "preconditions": [
+        "current_state is valid"
+      ],
+      "postconditions": [
+        "Returns new ExpansionState",
+        "If node_id was expanded, it is removed from expanded_ids",
+        "If node_id was collapsed, it is added to expanded_ids",
+        "Original current_state unchanged"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 5,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "emit_phase_change_event",
+      "description": "Emit SSE event when PACT phase changes. Constructs PactPhaseChangeEvent and publishes to SSE bus.",
+      "inputs": [
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project identifier",
+          "validators": []
+        },
+        {
+          "name": "old_phase",
+          "type_ref": "Phase",
+          "required": false,
+          "default": "",
+          "description": "Previous phase (null if first phase)",
+          "validators": []
+        },
+        {
+          "name": "new_phase",
+          "type_ref": "Phase",
+          "required": true,
+          "default": "",
+          "description": "New current phase",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [
+        {
+          "name": "SSEBusUnavailable",
+          "condition": "SSE event bus is not initialized",
+          "error_type": "RuntimeError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "project_id is non-empty",
+        "new_phase is valid Phase"
+      ],
+      "postconditions": [
+        "PactPhaseChangeEvent published to SSE bus",
+        "Event includes timestamp"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "SSE event bus",
+          "description": "Publishes phase change event to SSE subscribers"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 10,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "emit_health_update_event",
+      "description": "Emit SSE event when health metric updates. Constructs PactHealthUpdateEvent with delta payload.",
+      "inputs": [
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project identifier",
+          "validators": []
+        },
+        {
+          "name": "metric_name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Name of updated metric",
+          "validators": []
+        },
+        {
+          "name": "delta",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Delta payload containing only changed values",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [
+        {
+          "name": "SSEBusUnavailable",
+          "condition": "SSE event bus is not initialized",
+          "error_type": "RuntimeError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "project_id is non-empty",
+        "metric_name is one of: output_planning_ratio, rejection_rate, budget_velocity, phase_balance, cascade_detection"
+      ],
+      "postconditions": [
+        "PactHealthUpdateEvent published to SSE bus",
+        "Event includes timestamp and delta"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "SSE event bus",
+          "description": "Publishes health update event to SSE subscribers"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 10,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "watch_pact_directory",
+      "description": "Set up filesystem watcher on PACT directory. Triggers re-parsing and event emission on file changes. Uses chokidar.",
+      "inputs": [
+        {
+          "name": "directory_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to PACT directory to watch",
+          "validators": []
+        },
+        {
+          "name": "on_change_callback",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Callback function name to invoke on changes",
+          "validators": []
+        }
+      ],
+      "output_type": "str",
+      "error_cases": [
+        {
+          "name": "DirectoryNotFound",
+          "condition": "directory_path does not exist",
+          "error_type": "FileNotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "WatcherInitializationFailed",
+          "condition": "chokidar cannot initialize watcher",
+          "error_type": "RuntimeError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "directory_path exists and is readable"
+      ],
+      "postconditions": [
+        "Returns watcher_id for cleanup",
+        "Filesystem watcher active on directory",
+        "on_change_callback invoked when files change"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "PACT directory",
+          "description": "Monitors filesystem for changes"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "cleanup_watcher",
+      "description": "Stop and cleanup filesystem watcher by watcher_id.",
+      "inputs": [
+        {
+          "name": "watcher_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Watcher identifier returned from watch_pact_directory",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [
+        {
+          "name": "WatcherNotFound",
+          "condition": "watcher_id does not exist",
+          "error_type": "ValueError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "watcher_id corresponds to active watcher"
+      ],
+      "postconditions": [
+        "Watcher stopped and resources released",
+        "No further callbacks triggered"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "Filesystem watcher registry",
+          "description": "Removes watcher from active registry"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    }
+  ],
+  "dependencies": [],
+  "dependency_contracts": {},
+  "invariants": [
+    "All TreeNode structures have depth <= 2 (0-indexed, max 3 levels)",
+    "PipelineState always contains exactly 8 PhaseStep objects in fixed order",
+    "Percentage values are always in range [0.0, 100.0]",
+    "Ratio values are always >= 0.0",
+    "ExpansionState.expanded_ids contains only valid component IDs present in tree",
+    "Phase enum values follow strict progression: Interview→Shape→Decompose→Contract→Test→Implement→Integrate→Polish",
+    "All HealthMetricResult discriminated unions have exactly one of: status='computed'|'insufficient'|'error'",
+    "MetricHistory.snapshots are ordered by timestamp ascending",
+    "All parse functions return Result type and never throw exceptions on malformed input",
+    "SSE events have version=1 for current schema"
+  ],
+  "requires": [
+    "Zod schema definitions for all domain types (RawPactData, PhaseStep, ComponentContractData, etc.)",
+    "Chokidar library for filesystem watching",
+    "Recharts library installed and compatible with data point format",
+    "SSE event bus implementation with publish/subscribe interface",
+    "Node.js fs/promises API for file reading",
+    "TypeScript strict mode enabled for discriminated union type checking"
+  ],
+  "processing_register": "pragmatic-implementation"
+}

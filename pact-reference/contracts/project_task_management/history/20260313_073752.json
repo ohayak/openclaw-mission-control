@@ -1,0 +1,2153 @@
+{
+  "component_id": "project_task_management",
+  "name": "Project & Task Management",
+  "description": "CRUD API routes and UI for projects and tasks with SQLite persistence, Zod validation, SSE events, and responsive Kanban board. Handles PACT directory validation for PACT-enabled projects.",
+  "version": 1,
+  "types": [
+    {
+      "name": "ProjectStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "active",
+        "archived",
+        "paused"
+      ],
+      "inner_types": [],
+      "description": "Project lifecycle status"
+    },
+    {
+      "name": "TaskStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "backlog",
+        "in_progress",
+        "review",
+        "done"
+      ],
+      "inner_types": [],
+      "description": "Task workflow status for Kanban columns"
+    },
+    {
+      "name": "TaskPriority",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "inner_types": [],
+      "description": "Task priority levels"
+    },
+    {
+      "name": "AssigneeType",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "agent",
+        "human",
+        "unassigned"
+      ],
+      "inner_types": [],
+      "description": "Type of task assignee"
+    },
+    {
+      "name": "SortOrder",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "asc",
+        "desc"
+      ],
+      "inner_types": [],
+      "description": "Sort direction for queries"
+    },
+    {
+      "name": "Project",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Primary key",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project name (max 200 chars)",
+          "validators": []
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project description (max 2000 chars)",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "ProjectStatus",
+          "required": true,
+          "default": "",
+          "description": "Current project status",
+          "validators": []
+        },
+        {
+          "name": "pact_enabled",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether PACT integration is enabled",
+          "validators": []
+        },
+        {
+          "name": "pact_directory_path",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Absolute path to PACT directory (null if not enabled)",
+          "validators": []
+        },
+        {
+          "name": "created_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp",
+          "validators": []
+        },
+        {
+          "name": "updated_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp for optimistic concurrency",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Complete project record from database"
+    },
+    {
+      "name": "ProjectInsert",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project name (1-200 chars)",
+          "validators": []
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project description (0-2000 chars)",
+          "validators": []
+        },
+        {
+          "name": "pact_enabled",
+          "type_ref": "bool",
+          "required": false,
+          "default": "",
+          "description": "Enable PACT integration",
+          "validators": []
+        },
+        {
+          "name": "pact_directory_path",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Path to PACT directory (required if pact_enabled)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Data for creating a new project"
+    },
+    {
+      "name": "ProjectUpdate",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Updated project name",
+          "validators": []
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Updated description",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "ProjectStatus",
+          "required": false,
+          "default": "",
+          "description": "Updated status",
+          "validators": []
+        },
+        {
+          "name": "pact_enabled",
+          "type_ref": "bool",
+          "required": false,
+          "default": "",
+          "description": "Updated PACT enabled flag",
+          "validators": []
+        },
+        {
+          "name": "pact_directory_path",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Updated PACT directory path",
+          "validators": []
+        },
+        {
+          "name": "updated_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Client's last known updated_at for optimistic locking",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Data for updating an existing project"
+    },
+    {
+      "name": "Task",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Primary key",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Foreign key to projects table",
+          "validators": []
+        },
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task title (max 300 chars)",
+          "validators": []
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task description (max 5000 chars)",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "TaskStatus",
+          "required": true,
+          "default": "",
+          "description": "Current task status",
+          "validators": []
+        },
+        {
+          "name": "priority",
+          "type_ref": "TaskPriority",
+          "required": true,
+          "default": "",
+          "description": "Task priority",
+          "validators": []
+        },
+        {
+          "name": "assignee_type",
+          "type_ref": "AssigneeType",
+          "required": true,
+          "default": "",
+          "description": "Type of assignee",
+          "validators": []
+        },
+        {
+          "name": "assignee_name",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Name of assignee (null if unassigned)",
+          "validators": []
+        },
+        {
+          "name": "display_order",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Position within status column for Kanban",
+          "validators": []
+        },
+        {
+          "name": "created_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp",
+          "validators": []
+        },
+        {
+          "name": "updated_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp for optimistic concurrency",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Complete task record from database"
+    },
+    {
+      "name": "TaskInsert",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Parent project ID",
+          "validators": []
+        },
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task title (1-300 chars)",
+          "validators": []
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task description (0-5000 chars)",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "TaskStatus",
+          "required": false,
+          "default": "",
+          "description": "Initial status (default: backlog)",
+          "validators": []
+        },
+        {
+          "name": "priority",
+          "type_ref": "TaskPriority",
+          "required": false,
+          "default": "",
+          "description": "Task priority (default: medium)",
+          "validators": []
+        },
+        {
+          "name": "assignee_type",
+          "type_ref": "AssigneeType",
+          "required": false,
+          "default": "",
+          "description": "Assignee type (default: unassigned)",
+          "validators": []
+        },
+        {
+          "name": "assignee_name",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Assignee name (required if assignee_type != unassigned)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Data for creating a new task"
+    },
+    {
+      "name": "TaskUpdate",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Updated task title",
+          "validators": []
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Updated description",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "TaskStatus",
+          "required": false,
+          "default": "",
+          "description": "Updated status (validated)",
+          "validators": []
+        },
+        {
+          "name": "priority",
+          "type_ref": "TaskPriority",
+          "required": false,
+          "default": "",
+          "description": "Updated priority",
+          "validators": []
+        },
+        {
+          "name": "assignee_type",
+          "type_ref": "AssigneeType",
+          "required": false,
+          "default": "",
+          "description": "Updated assignee type",
+          "validators": []
+        },
+        {
+          "name": "assignee_name",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Updated assignee name",
+          "validators": []
+        },
+        {
+          "name": "display_order",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Updated display order for drag-and-drop",
+          "validators": []
+        },
+        {
+          "name": "updated_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Client's last known updated_at for optimistic locking",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Data for updating an existing task"
+    },
+    {
+      "name": "PaginationParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "page",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Page number (1-indexed, default: 1)",
+          "validators": []
+        },
+        {
+          "name": "page_size",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Items per page (1-100, default: 50)",
+          "validators": []
+        },
+        {
+          "name": "sort_by",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Field to sort by",
+          "validators": []
+        },
+        {
+          "name": "sort_order",
+          "type_ref": "SortOrder",
+          "required": false,
+          "default": "",
+          "description": "Sort direction (default: desc)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Pagination and sorting parameters"
+    },
+    {
+      "name": "PaginatedResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "items",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Items for current page",
+          "validators": []
+        },
+        {
+          "name": "total",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total item count",
+          "validators": []
+        },
+        {
+          "name": "page",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Current page number",
+          "validators": []
+        },
+        {
+          "name": "page_size",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Items per page",
+          "validators": []
+        },
+        {
+          "name": "total_pages",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total number of pages",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Generic paginated response wrapper"
+    },
+    {
+      "name": "TaskFilterParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Filter by project",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "TaskStatus",
+          "required": false,
+          "default": "",
+          "description": "Filter by status",
+          "validators": []
+        },
+        {
+          "name": "priority",
+          "type_ref": "TaskPriority",
+          "required": false,
+          "default": "",
+          "description": "Filter by priority",
+          "validators": []
+        },
+        {
+          "name": "assignee_type",
+          "type_ref": "AssigneeType",
+          "required": false,
+          "default": "",
+          "description": "Filter by assignee type",
+          "validators": []
+        },
+        {
+          "name": "assignee_name",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by assignee name",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Filtering parameters for task queries"
+    },
+    {
+      "name": "PactDirectoryValidation",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "valid",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether structure is valid",
+          "validators": []
+        },
+        {
+          "name": "resolved_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute resolved path",
+          "validators": []
+        },
+        {
+          "name": "errors",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of validation error messages",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Result of PACT directory structure validation"
+    },
+    {
+      "name": "StatusTransitionValidation",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "valid",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether transition is allowed",
+          "validators": []
+        },
+        {
+          "name": "error_message",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Error message if invalid",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Result of task status transition validation"
+    },
+    {
+      "name": "ErrorResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "error",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Error type (e.g., 'validation_error')",
+          "validators": []
+        },
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error message",
+          "validators": []
+        },
+        {
+          "name": "details",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Additional error context (field errors, etc.)",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Standard API error response shape"
+    },
+    {
+      "name": "TaskStatusChangedEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Event type: 'task_status_changed'",
+          "validators": []
+        },
+        {
+          "name": "task_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "ID of changed task",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Parent project ID",
+          "validators": []
+        },
+        {
+          "name": "old_status",
+          "type_ref": "TaskStatus",
+          "required": true,
+          "default": "",
+          "description": "Previous status",
+          "validators": []
+        },
+        {
+          "name": "new_status",
+          "type_ref": "TaskStatus",
+          "required": true,
+          "default": "",
+          "description": "New status",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp",
+          "validators": []
+        },
+        {
+          "name": "version",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Event schema version",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "SSE event for task status changes"
+    },
+    {
+      "name": "TaskCreatedEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Event type: 'task_created'",
+          "validators": []
+        },
+        {
+          "name": "task_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "ID of created task",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Parent project ID",
+          "validators": []
+        },
+        {
+          "name": "task",
+          "type_ref": "Task",
+          "required": true,
+          "default": "",
+          "description": "Full task object",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp",
+          "validators": []
+        },
+        {
+          "name": "version",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Event schema version",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "SSE event for task creation"
+    },
+    {
+      "name": "TaskUpdatedEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Event type: 'task_updated'",
+          "validators": []
+        },
+        {
+          "name": "task_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "ID of updated task",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Parent project ID",
+          "validators": []
+        },
+        {
+          "name": "task",
+          "type_ref": "Task",
+          "required": true,
+          "default": "",
+          "description": "Full updated task object",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp",
+          "validators": []
+        },
+        {
+          "name": "version",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Event schema version",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "SSE event for task updates"
+    },
+    {
+      "name": "TaskDeletedEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Event type: 'task_deleted'",
+          "validators": []
+        },
+        {
+          "name": "task_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "ID of deleted task",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Parent project ID",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp",
+          "validators": []
+        },
+        {
+          "name": "version",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Event schema version",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "SSE event for task deletion"
+    },
+    {
+      "name": "ProjectCostSummary",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Project ID",
+          "validators": []
+        },
+        {
+          "name": "total_cost_usd",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Total cost in USD",
+          "validators": []
+        },
+        {
+          "name": "total_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total tokens consumed",
+          "validators": []
+        },
+        {
+          "name": "task_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of associated tasks",
+          "validators": []
+        },
+        {
+          "name": "period_start",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Start of cost period (ISO 8601)",
+          "validators": []
+        },
+        {
+          "name": "period_end",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "End of cost period (ISO 8601)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Cost breakdown for a project"
+    }
+  ],
+  "functions": [
+    {
+      "name": "list_projects",
+      "description": "Retrieve paginated list of projects with optional filtering and sorting",
+      "inputs": [
+        {
+          "name": "pagination",
+          "type_ref": "PaginationParams",
+          "required": false,
+          "default": "",
+          "description": "Pagination and sort params",
+          "validators": []
+        },
+        {
+          "name": "status_filter",
+          "type_ref": "ProjectStatus",
+          "required": false,
+          "default": "",
+          "description": "Filter by project status",
+          "validators": []
+        }
+      ],
+      "output_type": "PaginatedResponse",
+      "error_cases": [
+        {
+          "name": "database_error",
+          "condition": "SQLite query fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        },
+        {
+          "name": "invalid_sort_field",
+          "condition": "sort_by references non-existent column",
+          "error_type": "ValidationError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "pagination.page >= 1",
+        "pagination.page_size between 1 and 100",
+        "Database connection is available"
+      ],
+      "postconditions": [
+        "Returns projects ordered by sort criteria",
+        "total reflects filtered count",
+        "items.length <= page_size"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite database file",
+          "description": "Reads from projects table"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n = page_size"
+      }
+    },
+    {
+      "name": "get_project",
+      "description": "Retrieve a single project by ID",
+      "inputs": [
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Project primary key",
+          "validators": []
+        }
+      ],
+      "output_type": "Project",
+      "error_cases": [
+        {
+          "name": "not_found",
+          "condition": "No project exists with given ID",
+          "error_type": "NotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite query fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "project_id > 0"
+      ],
+      "postconditions": [
+        "Returns project with matching ID",
+        "All timestamps are valid ISO 8601 strings"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite database file",
+          "description": "Reads from projects table"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "create_project",
+      "description": "Create a new project with optional PACT integration. Validates PACT directory if enabled.",
+      "inputs": [
+        {
+          "name": "project_data",
+          "type_ref": "ProjectInsert",
+          "required": true,
+          "default": "",
+          "description": "Project creation data",
+          "validators": []
+        }
+      ],
+      "output_type": "Project",
+      "error_cases": [
+        {
+          "name": "validation_error",
+          "condition": "Input fails Zod schema validation",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "invalid_pact_directory",
+          "condition": "PACT directory validation fails",
+          "error_type": "ValidationError",
+          "error_data": {
+            "validation_errors": "list[str]"
+          }
+        },
+        {
+          "name": "duplicate_name",
+          "condition": "Project with same name already exists",
+          "error_type": "ConflictError",
+          "error_data": {}
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite insert fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "project_data.name length between 1 and 200",
+        "project_data.description length <= 2000",
+        "If pact_enabled is true, pact_directory_path must be provided",
+        "If pact_directory_path provided, must pass validatePactDirectory"
+      ],
+      "postconditions": [
+        "New project inserted into database",
+        "Returns project with generated ID and timestamps",
+        "pact_directory_path is stored as absolute resolved path if provided"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "SQLite database file",
+          "description": "Inserts into projects table"
+        },
+        {
+          "kind": "reads_file",
+          "target": "Filesystem (PACT directory)",
+          "description": "Validates PACT directory structure if enabled"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "update_project",
+      "description": "Update an existing project with optimistic concurrency control",
+      "inputs": [
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Project ID to update",
+          "validators": []
+        },
+        {
+          "name": "update_data",
+          "type_ref": "ProjectUpdate",
+          "required": true,
+          "default": "",
+          "description": "Fields to update",
+          "validators": []
+        }
+      ],
+      "output_type": "Project",
+      "error_cases": [
+        {
+          "name": "not_found",
+          "condition": "No project exists with given ID",
+          "error_type": "NotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "conflict",
+          "condition": "updated_at does not match (concurrent modification)",
+          "error_type": "ConflictError",
+          "error_data": {
+            "current_version": "str"
+          }
+        },
+        {
+          "name": "validation_error",
+          "condition": "Input fails Zod schema validation",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "invalid_pact_directory",
+          "condition": "PACT directory validation fails",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite update fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "project_id > 0",
+        "update_data.updated_at matches current database value",
+        "If pact_enabled changed to true, pact_directory_path must be valid",
+        "At least one field (other than updated_at) must be provided"
+      ],
+      "postconditions": [
+        "Project updated in database",
+        "updated_at timestamp is refreshed",
+        "Returns updated project"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "SQLite database file",
+          "description": "Updates projects table"
+        },
+        {
+          "kind": "reads_file",
+          "target": "Filesystem (PACT directory)",
+          "description": "Validates PACT directory if path changed"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 150,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "delete_project",
+      "description": "Delete a project and all associated tasks (cascading delete)",
+      "inputs": [
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Project ID to delete",
+          "validators": []
+        }
+      ],
+      "output_type": "bool",
+      "error_cases": [
+        {
+          "name": "not_found",
+          "condition": "No project exists with given ID",
+          "error_type": "NotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite delete fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "project_id > 0"
+      ],
+      "postconditions": [
+        "Project removed from database",
+        "All associated tasks are deleted (foreign key cascade)",
+        "Returns true on successful deletion"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "SQLite database file",
+          "description": "Deletes from projects and tasks tables"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n = number of associated tasks"
+      }
+    },
+    {
+      "name": "list_tasks",
+      "description": "Retrieve paginated list of tasks with filtering and sorting",
+      "inputs": [
+        {
+          "name": "pagination",
+          "type_ref": "PaginationParams",
+          "required": false,
+          "default": "",
+          "description": "Pagination and sort params",
+          "validators": []
+        },
+        {
+          "name": "filters",
+          "type_ref": "TaskFilterParams",
+          "required": false,
+          "default": "",
+          "description": "Filter criteria",
+          "validators": []
+        }
+      ],
+      "output_type": "PaginatedResponse",
+      "error_cases": [
+        {
+          "name": "database_error",
+          "condition": "SQLite query fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        },
+        {
+          "name": "invalid_sort_field",
+          "condition": "sort_by references non-existent column",
+          "error_type": "ValidationError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "pagination.page >= 1",
+        "pagination.page_size between 1 and 100",
+        "If filters.project_id provided, project must exist"
+      ],
+      "postconditions": [
+        "Returns tasks matching filter criteria",
+        "Tasks ordered by display_order within status columns when sorted by status",
+        "total reflects filtered count"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite database file",
+          "description": "Reads from tasks table"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 150,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n = page_size"
+      }
+    },
+    {
+      "name": "get_task",
+      "description": "Retrieve a single task by ID",
+      "inputs": [
+        {
+          "name": "task_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Task primary key",
+          "validators": []
+        }
+      ],
+      "output_type": "Task",
+      "error_cases": [
+        {
+          "name": "not_found",
+          "condition": "No task exists with given ID",
+          "error_type": "NotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite query fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "task_id > 0"
+      ],
+      "postconditions": [
+        "Returns task with matching ID",
+        "All timestamps are valid ISO 8601 strings"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite database file",
+          "description": "Reads from tasks table"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "create_task",
+      "description": "Create a new task and publish TaskCreatedEvent to SSE bus",
+      "inputs": [
+        {
+          "name": "task_data",
+          "type_ref": "TaskInsert",
+          "required": true,
+          "default": "",
+          "description": "Task creation data",
+          "validators": []
+        }
+      ],
+      "output_type": "Task",
+      "error_cases": [
+        {
+          "name": "validation_error",
+          "condition": "Input fails Zod schema validation",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "foreign_key_violation",
+          "condition": "project_id does not exist",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite insert fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        },
+        {
+          "name": "sse_publish_error",
+          "condition": "SSE event publish fails",
+          "error_type": "InternalError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "task_data.project_id references existing project",
+        "task_data.title length between 1 and 300",
+        "task_data.description length <= 5000",
+        "If assignee_type != unassigned, assignee_name must be provided"
+      ],
+      "postconditions": [
+        "New task inserted into database",
+        "Returns task with generated ID and timestamps",
+        "display_order set to max + 1 within status column",
+        "TaskCreatedEvent published to SSE bus"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "SQLite database file",
+          "description": "Inserts into tasks table"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SSE event bus",
+          "description": "Publishes TaskCreatedEvent"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 150,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "update_task",
+      "description": "Update an existing task with optimistic concurrency control. Publishes TaskUpdatedEvent or TaskStatusChangedEvent.",
+      "inputs": [
+        {
+          "name": "task_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Task ID to update",
+          "validators": []
+        },
+        {
+          "name": "update_data",
+          "type_ref": "TaskUpdate",
+          "required": true,
+          "default": "",
+          "description": "Fields to update",
+          "validators": []
+        }
+      ],
+      "output_type": "Task",
+      "error_cases": [
+        {
+          "name": "not_found",
+          "condition": "No task exists with given ID",
+          "error_type": "NotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "conflict",
+          "condition": "updated_at does not match (concurrent modification)",
+          "error_type": "ConflictError",
+          "error_data": {
+            "current_version": "str"
+          }
+        },
+        {
+          "name": "validation_error",
+          "condition": "Input fails Zod schema validation",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "invalid_status_transition",
+          "condition": "Status transition not allowed",
+          "error_type": "ConflictError",
+          "error_data": {
+            "allowed_transitions": "list[str]"
+          }
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite update fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        },
+        {
+          "name": "sse_publish_error",
+          "condition": "SSE event publish fails",
+          "error_type": "InternalError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "task_id > 0",
+        "update_data.updated_at matches current database value",
+        "If status changed, validateStatusTransition must pass",
+        "If assignee_type changed to agent/human, assignee_name must be provided",
+        "At least one field (other than updated_at) must be provided"
+      ],
+      "postconditions": [
+        "Task updated in database",
+        "updated_at timestamp is refreshed",
+        "If status changed, TaskStatusChangedEvent published",
+        "TaskUpdatedEvent published to SSE bus",
+        "Returns updated task"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "SQLite database file",
+          "description": "Updates tasks table"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SSE event bus",
+          "description": "Publishes TaskUpdatedEvent or TaskStatusChangedEvent"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 150,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "delete_task",
+      "description": "Delete a task and publish TaskDeletedEvent to SSE bus",
+      "inputs": [
+        {
+          "name": "task_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Task ID to delete",
+          "validators": []
+        }
+      ],
+      "output_type": "bool",
+      "error_cases": [
+        {
+          "name": "not_found",
+          "condition": "No task exists with given ID",
+          "error_type": "NotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite delete fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        },
+        {
+          "name": "sse_publish_error",
+          "condition": "SSE event publish fails",
+          "error_type": "InternalError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "task_id > 0"
+      ],
+      "postconditions": [
+        "Task removed from database",
+        "TaskDeletedEvent published to SSE bus",
+        "Returns true on successful deletion"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "SQLite database file",
+          "description": "Deletes from tasks table"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SSE event bus",
+          "description": "Publishes TaskDeletedEvent"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "reorder_tasks",
+      "description": "Bulk update display_order for tasks in Kanban column (drag-and-drop support)",
+      "inputs": [
+        {
+          "name": "task_orders",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of {task_id: int, display_order: int, updated_at: str}",
+          "validators": []
+        }
+      ],
+      "output_type": "bool",
+      "error_cases": [
+        {
+          "name": "validation_error",
+          "condition": "Input validation fails",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "conflict",
+          "condition": "Any updated_at does not match",
+          "error_type": "ConflictError",
+          "error_data": {}
+        },
+        {
+          "name": "not_found",
+          "condition": "Any task_id does not exist",
+          "error_type": "NotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite transaction fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "All task_ids must exist",
+        "All tasks belong to same project and status column",
+        "display_order values are unique within update set"
+      ],
+      "postconditions": [
+        "All specified tasks have updated display_order",
+        "updated_at timestamps refreshed for all affected tasks",
+        "Returns true on success"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "SQLite database file",
+          "description": "Updates tasks table in transaction"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 300,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n = number of tasks to reorder"
+      }
+    },
+    {
+      "name": "validate_pact_directory",
+      "description": "Validate PACT directory structure (.pact/ subdirectory and pact.yaml file)",
+      "inputs": [
+        {
+          "name": "directory_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to PACT directory",
+          "validators": []
+        }
+      ],
+      "output_type": "PactDirectoryValidation",
+      "error_cases": [
+        {
+          "name": "filesystem_error",
+          "condition": "Path resolution or access check fails",
+          "error_type": "FilesystemError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "directory_path is non-empty string"
+      ],
+      "postconditions": [
+        "Returns validation result with resolved absolute path",
+        "errors list contains specific missing/invalid items",
+        "valid is true only if .pact/ exists and pact.yaml is readable"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "Filesystem (PACT directory)",
+          "description": "Checks directory existence and structure"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "validate_status_transition",
+      "description": "Validate whether a task status transition is allowed",
+      "inputs": [
+        {
+          "name": "from_status",
+          "type_ref": "TaskStatus",
+          "required": true,
+          "default": "",
+          "description": "Current task status",
+          "validators": []
+        },
+        {
+          "name": "to_status",
+          "type_ref": "TaskStatus",
+          "required": true,
+          "default": "",
+          "description": "Desired new status",
+          "validators": []
+        }
+      ],
+      "output_type": "StatusTransitionValidation",
+      "error_cases": [],
+      "preconditions": [
+        "from_status and to_status are valid TaskStatus values"
+      ],
+      "postconditions": [
+        "Returns validation result",
+        "Allowed transitions: backlog -> in_progress, in_progress -> review|backlog, review -> done|in_progress, done -> backlog",
+        "error_message provided if valid is false"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 5,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "get_project_cost_summary",
+      "description": "Retrieve cost breakdown for a project over optional time period",
+      "inputs": [
+        {
+          "name": "project_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Project ID",
+          "validators": []
+        },
+        {
+          "name": "period_start",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ISO 8601 start timestamp",
+          "validators": []
+        },
+        {
+          "name": "period_end",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ISO 8601 end timestamp",
+          "validators": []
+        }
+      ],
+      "output_type": "ProjectCostSummary",
+      "error_cases": [
+        {
+          "name": "not_found",
+          "condition": "Project does not exist",
+          "error_type": "NotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "validation_error",
+          "condition": "Invalid timestamp format",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "database_error",
+          "condition": "SQLite query fails",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "project_id > 0",
+        "If period_start provided, must be valid ISO 8601",
+        "If period_end provided, must be >= period_start"
+      ],
+      "postconditions": [
+        "Returns aggregated cost data from agent activity logs",
+        "total_cost_usd is sum of all costs in period",
+        "total_tokens is sum of all tokens consumed",
+        "task_count reflects associated tasks"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite database file",
+          "description": "Reads from projects, tasks, and agent activity tables"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n = number of activity records in period"
+      }
+    },
+    {
+      "name": "bad_request",
+      "description": "Create a 400 Bad Request error response",
+      "inputs": [
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Error message",
+          "validators": []
+        },
+        {
+          "name": "details",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Additional error details",
+          "validators": []
+        }
+      ],
+      "output_type": "ErrorResponse",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returns ErrorResponse with error='validation_error'",
+        "timestamp is current ISO 8601 time"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "not_found",
+      "description": "Create a 404 Not Found error response",
+      "inputs": [
+        {
+          "name": "resource_type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Type of resource (e.g., 'Project', 'Task')",
+          "validators": []
+        },
+        {
+          "name": "resource_id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "ID of missing resource",
+          "validators": []
+        }
+      ],
+      "output_type": "ErrorResponse",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returns ErrorResponse with error='not_found'",
+        "message includes resource type and ID"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "conflict",
+      "description": "Create a 409 Conflict error response",
+      "inputs": [
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Conflict description",
+          "validators": []
+        },
+        {
+          "name": "details",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Conflict details (e.g., current version)",
+          "validators": []
+        }
+      ],
+      "output_type": "ErrorResponse",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returns ErrorResponse with error='conflict'",
+        "details includes conflict resolution hints"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "server_error",
+      "description": "Create a 500 Internal Server Error response",
+      "inputs": [
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Error description",
+          "validators": []
+        },
+        {
+          "name": "log_details",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Internal details for logging (not exposed to client)",
+          "validators": []
+        }
+      ],
+      "output_type": "ErrorResponse",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returns ErrorResponse with error='internal_error'",
+        "log_details written to server logs but not included in response"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "logging",
+          "target": "Server error logs",
+          "description": "Logs internal error details"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "publish_task_event",
+      "description": "Publish a task-related event to SSE bus with heartbeat support",
+      "inputs": [
+        {
+          "name": "event",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Event object (TaskStatusChangedEvent | TaskCreatedEvent | TaskUpdatedEvent | TaskDeletedEvent)",
+          "validators": []
+        }
+      ],
+      "output_type": "bool",
+      "error_cases": [
+        {
+          "name": "serialization_error",
+          "condition": "Event cannot be serialized to JSON",
+          "error_type": "InternalError",
+          "error_data": {}
+        },
+        {
+          "name": "bus_error",
+          "condition": "SSE bus is unavailable",
+          "error_type": "InternalError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "event has required fields for its type",
+        "event.version is set to current schema version (1)"
+      ],
+      "postconditions": [
+        "Event published to SSE bus",
+        "All connected clients receive event if subscribed",
+        "Returns true on success"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SSE event bus",
+          "description": "Publishes event to all subscribers"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 10,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n = number of connected SSE clients"
+      }
+    }
+  ],
+  "dependencies": [],
+  "dependency_contracts": {},
+  "invariants": [
+    "All task.project_id values reference existing projects (foreign key constraint)",
+    "All task.display_order values are unique within (project_id, status) groups",
+    "All task.updated_at values are monotonically increasing for a given task",
+    "All project.pact_directory_path values are absolute paths or null",
+    "If task.assignee_type = 'unassigned', task.assignee_name must be null",
+    "If task.assignee_type != 'unassigned', task.assignee_name must be non-empty string",
+    "All timestamp fields are valid ISO 8601 strings",
+    "All enum fields contain only defined variant values",
+    "Project names are unique within the database",
+    "All SSE events include version field for schema evolution",
+    "Database uses PRAGMA foreign_keys = ON"
+  ],
+  "requires": [
+    "SQLite database with projects and tasks tables initialized",
+    "Zod library for validation schemas",
+    "SSE event bus interface available",
+    "Node.js fs/promises for filesystem access",
+    "better-sqlite3 for synchronous database access",
+    "Next.js 15 Route Handlers for API endpoints",
+    "@dnd-kit for drag-and-drop on desktop",
+    "Tailwind CSS v4 for responsive styling at 375px minimum width"
+  ],
+  "processing_register": "pragmatic-implementation"
+}

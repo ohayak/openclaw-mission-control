@@ -1,0 +1,3708 @@
+{
+  "component_id": "data_layer",
+  "name": "Data Access Layer (Filesystem + SQLite)",
+  "description": "The lib/data/ module that is the single gateway for all data access. Three-tier architecture: Tier 1 (lib/types/) defines domain types, Zod schemas, and Result<T> discriminated union. Tier 2 (lib/openclaw/, lib/pact/) provides internal parsers that separate I/O (read) from validation (parse) for testability. Tier 3 (lib/data/) is the public facade re-exporting domain-level functions with Map-based TTL caching. lib/db/ provides typed SQLite wrappers in WAL mode. All parsers return typed results with explicit error states. All filesystem access uses try-read-catch pattern (no existence checks). Base directories are always parameters for dependency injection in tests. Date strings use ISO 8601 format throughout. Naming convention: get* returns single item, list* returns arrays, create/update/delete mutate SQLite.",
+  "version": 1,
+  "types": [
+    {
+      "name": "ErrorKind",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "not_found",
+        "malformed",
+        "permission_denied",
+        "io_error",
+        "empty"
+      ],
+      "inner_types": [],
+      "description": "Finite union of error categories for all data access operations."
+    },
+    {
+      "name": "DataError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type_ref": "ErrorKind",
+          "required": true,
+          "default": "",
+          "description": "Category of the error.",
+          "validators": []
+        },
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error description.",
+          "validators": []
+        },
+        {
+          "name": "filePath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path of the file that caused the error, or empty string if not file-related.",
+          "validators": []
+        },
+        {
+          "name": "originalError",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Stringified original error (e.g., ENOENT message, Zod error format output).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Structured error carrying context for debugging. Every failed Result includes one."
+    },
+    {
+      "name": "ResultOk",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ok",
+          "type_ref": "bool",
+          "required": true,
+          "default": "true",
+          "description": "Always true for success variant.",
+          "validators": []
+        },
+        {
+          "name": "value",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "The successfully parsed/retrieved value. Actual type is generic T in implementation.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Success variant of the Result discriminated union."
+    },
+    {
+      "name": "ResultErr",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ok",
+          "type_ref": "bool",
+          "required": true,
+          "default": "false",
+          "description": "Always false for error variant.",
+          "validators": []
+        },
+        {
+          "name": "error",
+          "type_ref": "DataError",
+          "required": true,
+          "default": "",
+          "description": "Structured error with context.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Error variant of the Result discriminated union."
+    },
+    {
+      "name": "Result",
+      "kind": "union",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "ResultOk",
+        "ResultErr"
+      ],
+      "description": "Discriminated union for all data access returns. Discriminated on the 'ok' boolean field. Implementation uses TypeScript: type Result<T> = { ok: true; value: T } | { ok: false; error: DataError }."
+    },
+    {
+      "name": "AgentRole",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "architect",
+        "developer",
+        "reviewer",
+        "tester",
+        "orchestrator",
+        "custom"
+      ],
+      "inner_types": [],
+      "description": "Roles an agent can have in the OpenClaw system."
+    },
+    {
+      "name": "AgentStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "idle",
+        "working",
+        "error",
+        "offline",
+        "unknown"
+      ],
+      "inner_types": [],
+      "description": "Current operational status of an agent."
+    },
+    {
+      "name": "AgentDefinition",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique agent identifier.",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable agent name.",
+          "validators": []
+        },
+        {
+          "name": "role",
+          "type_ref": "AgentRole",
+          "required": true,
+          "default": "",
+          "description": "Agent's assigned role.",
+          "validators": []
+        },
+        {
+          "name": "model",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "LLM model identifier (e.g., 'claude-sonnet-4-20250514').",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "AgentStatus",
+          "required": true,
+          "default": "",
+          "description": "Current operational status.",
+          "validators": []
+        },
+        {
+          "name": "workspaceDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to agent's workspace directory.",
+          "validators": []
+        },
+        {
+          "name": "customRole",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Custom role description when role is 'custom'.",
+          "validators": []
+        },
+        {
+          "name": "lastActiveAt",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ISO 8601 timestamp of last activity, or empty if never active.",
+          "validators": []
+        },
+        {
+          "name": "configHash",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "SHA-256 hash of the agent's config block for change detection.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "An agent definition parsed from openclaw.json. Represents a configured AI agent."
+    },
+    {
+      "name": "AgentList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "AgentDefinition",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of agent definitions."
+    },
+    {
+      "name": "OpenClawConfig",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "version",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Config file version string.",
+          "validators": []
+        },
+        {
+          "name": "projectName",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Name of the OpenClaw project.",
+          "validators": []
+        },
+        {
+          "name": "agents",
+          "type_ref": "AgentList",
+          "required": true,
+          "default": "",
+          "description": "All configured agents.",
+          "validators": []
+        },
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Resolved absolute base directory of the OpenClaw project.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Top-level OpenClaw configuration parsed from openclaw.json."
+    },
+    {
+      "name": "PipelinePhase",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "not_started",
+        "decomposition",
+        "contracting",
+        "implementation",
+        "testing",
+        "complete",
+        "unknown"
+      ],
+      "inner_types": [],
+      "description": "Current phase of a PACT project pipeline, derived from directory contents."
+    },
+    {
+      "name": "ContractStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "draft",
+        "approved",
+        "implemented",
+        "tested",
+        "missing"
+      ],
+      "inner_types": [],
+      "description": "Status of a single PACT contract file."
+    },
+    {
+      "name": "PactContract",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "componentId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Component identifier from the contract.",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable component name.",
+          "validators": []
+        },
+        {
+          "name": "filePath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Relative path to the contract file from project root.",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "ContractStatus",
+          "required": true,
+          "default": "",
+          "description": "Derived status of this contract.",
+          "validators": []
+        },
+        {
+          "name": "version",
+          "type_ref": "int",
+          "required": true,
+          "default": "1",
+          "description": "Contract version number.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single PACT contract and its current status."
+    },
+    {
+      "name": "PactContractList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "PactContract",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of PACT contracts."
+    },
+    {
+      "name": "TestResult",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "pass",
+        "fail",
+        "skip",
+        "error",
+        "not_run"
+      ],
+      "inner_types": [],
+      "description": "Outcome of a test execution."
+    },
+    {
+      "name": "PactTestSuite",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "componentId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Component this test suite covers.",
+          "validators": []
+        },
+        {
+          "name": "totalTests",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total number of tests.",
+          "validators": []
+        },
+        {
+          "name": "passed",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of passing tests.",
+          "validators": []
+        },
+        {
+          "name": "failed",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of failing tests.",
+          "validators": []
+        },
+        {
+          "name": "skipped",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of skipped tests.",
+          "validators": []
+        },
+        {
+          "name": "errors",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of tests that errored.",
+          "validators": []
+        },
+        {
+          "name": "lastRunAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp of last test run, or empty if never run.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Aggregated test results for a PACT component."
+    },
+    {
+      "name": "PactTestSuiteList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "PactTestSuite",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of test suites."
+    },
+    {
+      "name": "ComponentNode",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Component identifier.",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Component display name.",
+          "validators": []
+        },
+        {
+          "name": "parentId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Parent component ID, or empty string for root.",
+          "validators": []
+        },
+        {
+          "name": "children",
+          "type_ref": "ComponentNodeList",
+          "required": true,
+          "default": "",
+          "description": "Child component nodes.",
+          "validators": []
+        },
+        {
+          "name": "contractStatus",
+          "type_ref": "ContractStatus",
+          "required": true,
+          "default": "",
+          "description": "Status of this component's contract.",
+          "validators": []
+        },
+        {
+          "name": "hasImplementation",
+          "type_ref": "bool",
+          "required": true,
+          "default": "false",
+          "description": "Whether source code exists in src/ for this component.",
+          "validators": []
+        },
+        {
+          "name": "hasTests",
+          "type_ref": "bool",
+          "required": true,
+          "default": "false",
+          "description": "Whether tests exist in tests/ for this component.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A node in the PACT component decomposition tree."
+    },
+    {
+      "name": "ComponentNodeList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "ComponentNode",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of component tree nodes."
+    },
+    {
+      "name": "PactProjectConfig",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "projectId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique project identifier.",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project display name.",
+          "validators": []
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project description.",
+          "validators": []
+        },
+        {
+          "name": "createdAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 creation timestamp.",
+          "validators": []
+        },
+        {
+          "name": "rootDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Resolved absolute root directory of the PACT project.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Parsed pact.yaml configuration for a PACT project."
+    },
+    {
+      "name": "PactProjectSummary",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "config",
+          "type_ref": "PactProjectConfig",
+          "required": true,
+          "default": "",
+          "description": "Project configuration from pact.yaml.",
+          "validators": []
+        },
+        {
+          "name": "phase",
+          "type_ref": "PipelinePhase",
+          "required": true,
+          "default": "",
+          "description": "Current pipeline phase.",
+          "validators": []
+        },
+        {
+          "name": "componentTree",
+          "type_ref": "ComponentNodeList",
+          "required": true,
+          "default": "",
+          "description": "Root-level component tree nodes.",
+          "validators": []
+        },
+        {
+          "name": "contracts",
+          "type_ref": "PactContractList",
+          "required": true,
+          "default": "",
+          "description": "All contracts in the project.",
+          "validators": []
+        },
+        {
+          "name": "testSuites",
+          "type_ref": "PactTestSuiteList",
+          "required": true,
+          "default": "",
+          "description": "Test results per component.",
+          "validators": []
+        },
+        {
+          "name": "totalComponents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total components in decomposition.",
+          "validators": []
+        },
+        {
+          "name": "contractedCount",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of components with non-missing contracts.",
+          "validators": []
+        },
+        {
+          "name": "implementedCount",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of components with source code.",
+          "validators": []
+        },
+        {
+          "name": "testedCount",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of components with passing tests.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Aggregated summary of a PACT project's state, composed from multiple parsed sources."
+    },
+    {
+      "name": "PactProjectSummaryList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "PactProjectSummary",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of project summaries."
+    },
+    {
+      "name": "TokenUsage",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "inputTokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of input/prompt tokens.",
+          "validators": []
+        },
+        {
+          "name": "outputTokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of output/completion tokens.",
+          "validators": []
+        },
+        {
+          "name": "cacheReadTokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "0",
+          "description": "Tokens read from cache.",
+          "validators": []
+        },
+        {
+          "name": "cacheWriteTokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "0",
+          "description": "Tokens written to cache.",
+          "validators": []
+        },
+        {
+          "name": "totalTokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total tokens (input + output).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Token consumption for a single agent session or API call."
+    },
+    {
+      "name": "CostRecord",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agentId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Agent that incurred the cost.",
+          "validators": []
+        },
+        {
+          "name": "sessionId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Session identifier.",
+          "validators": []
+        },
+        {
+          "name": "model",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Model used for this session.",
+          "validators": []
+        },
+        {
+          "name": "tokens",
+          "type_ref": "TokenUsage",
+          "required": true,
+          "default": "",
+          "description": "Token breakdown.",
+          "validators": []
+        },
+        {
+          "name": "costUsd",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Estimated cost in USD.",
+          "validators": []
+        },
+        {
+          "name": "startedAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 session start timestamp.",
+          "validators": []
+        },
+        {
+          "name": "endedAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 session end timestamp, or empty if still running.",
+          "validators": []
+        },
+        {
+          "name": "projectId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Associated project ID, or empty if not project-scoped.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Cost data for a single session or time period."
+    },
+    {
+      "name": "CostRecordList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "CostRecord",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of cost records."
+    },
+    {
+      "name": "CostSummary",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "totalCostUsd",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Total cost in USD.",
+          "validators": []
+        },
+        {
+          "name": "totalInputTokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total input tokens.",
+          "validators": []
+        },
+        {
+          "name": "totalOutputTokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total output tokens.",
+          "validators": []
+        },
+        {
+          "name": "totalTokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Grand total tokens.",
+          "validators": []
+        },
+        {
+          "name": "recordCount",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of cost records aggregated.",
+          "validators": []
+        },
+        {
+          "name": "byAgent",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Map of agentId -> total cost USD.",
+          "validators": []
+        },
+        {
+          "name": "byModel",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Map of model -> total cost USD.",
+          "validators": []
+        },
+        {
+          "name": "periodStart",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 start of aggregation period.",
+          "validators": []
+        },
+        {
+          "name": "periodEnd",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 end of aggregation period.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Aggregated cost summary over a time range."
+    },
+    {
+      "name": "UserTask",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID task identifier.",
+          "validators": []
+        },
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task title.",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..500",
+              "error_message": "Title must be between 1 and 500 characters."
+            }
+          ]
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task description.",
+          "validators": []
+        },
+        {
+          "name": "projectId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Associated PACT project ID, or empty.",
+          "validators": []
+        },
+        {
+          "name": "assignedAgentId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Assigned agent ID, or empty.",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "TaskStatus",
+          "required": true,
+          "default": "",
+          "description": "Current task status.",
+          "validators": []
+        },
+        {
+          "name": "priority",
+          "type_ref": "TaskPriority",
+          "required": true,
+          "default": "",
+          "description": "Task priority level.",
+          "validators": []
+        },
+        {
+          "name": "createdAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 creation timestamp.",
+          "validators": []
+        },
+        {
+          "name": "updatedAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 last update timestamp.",
+          "validators": []
+        },
+        {
+          "name": "completedAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 completion timestamp, or empty.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A user-created task stored in SQLite (dashboard-specific data)."
+    },
+    {
+      "name": "TaskStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "todo",
+        "in_progress",
+        "blocked",
+        "done",
+        "cancelled"
+      ],
+      "inner_types": [],
+      "description": "Status of a user task."
+    },
+    {
+      "name": "TaskPriority",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "inner_types": [],
+      "description": "Priority level for a user task."
+    },
+    {
+      "name": "UserTaskList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "UserTask",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of user tasks."
+    },
+    {
+      "name": "CreateTaskInput",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task title.",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..500",
+              "error_message": "Title must be between 1 and 500 characters."
+            }
+          ]
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Task description.",
+          "validators": []
+        },
+        {
+          "name": "projectId",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Associated project ID.",
+          "validators": []
+        },
+        {
+          "name": "assignedAgentId",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Agent to assign.",
+          "validators": []
+        },
+        {
+          "name": "priority",
+          "type_ref": "TaskPriority",
+          "required": false,
+          "default": "medium",
+          "description": "Priority level.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Input for creating a new task. Validated with Zod."
+    },
+    {
+      "name": "UpdateTaskInput",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "New title.",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..500",
+              "error_message": "Title must be between 1 and 500 characters."
+            }
+          ]
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "New description.",
+          "validators": []
+        },
+        {
+          "name": "projectId",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "New project association.",
+          "validators": []
+        },
+        {
+          "name": "assignedAgentId",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "New agent assignment.",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "TaskStatus",
+          "required": false,
+          "default": "",
+          "description": "New status.",
+          "validators": []
+        },
+        {
+          "name": "priority",
+          "type_ref": "TaskPriority",
+          "required": false,
+          "default": "",
+          "description": "New priority.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Input for updating an existing task. All fields optional except id."
+    },
+    {
+      "name": "UserPreferences",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "userId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "User identifier (default: 'default' for single-user).",
+          "validators": []
+        },
+        {
+          "name": "theme",
+          "type_ref": "str",
+          "required": true,
+          "default": "dark",
+          "description": "UI theme.",
+          "validators": []
+        },
+        {
+          "name": "refreshIntervalMs",
+          "type_ref": "int",
+          "required": true,
+          "default": "5000",
+          "description": "Dashboard auto-refresh interval in milliseconds.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1000..60000",
+              "error_message": "Refresh interval must be between 1000ms and 60000ms."
+            }
+          ]
+        },
+        {
+          "name": "openclawBaseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Base directory for OpenClaw project.",
+          "validators": []
+        },
+        {
+          "name": "pactBaseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Base directory for PACT projects.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "User preferences stored in SQLite."
+    },
+    {
+      "name": "CacheEntry",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "key",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Cache key.",
+          "validators": []
+        },
+        {
+          "name": "value",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Cached value.",
+          "validators": []
+        },
+        {
+          "name": "expiresAt",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Unix timestamp in ms when entry expires.",
+          "validators": []
+        },
+        {
+          "name": "createdAt",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Unix timestamp in ms when entry was created.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Internal cache entry with TTL tracking."
+    },
+    {
+      "name": "CacheStats",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of entries in cache.",
+          "validators": []
+        },
+        {
+          "name": "hits",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total cache hits since startup.",
+          "validators": []
+        },
+        {
+          "name": "misses",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total cache misses since startup.",
+          "validators": []
+        },
+        {
+          "name": "evictions",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total evictions since startup.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Statistics about the in-memory cache."
+    },
+    {
+      "name": "ActivityEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique event identifier.",
+          "validators": []
+        },
+        {
+          "name": "type",
+          "type_ref": "ActivityEventType",
+          "required": true,
+          "default": "",
+          "description": "Type of activity event.",
+          "validators": []
+        },
+        {
+          "name": "agentId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Agent that triggered the event, or empty.",
+          "validators": []
+        },
+        {
+          "name": "projectId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Related project ID, or empty.",
+          "validators": []
+        },
+        {
+          "name": "summary",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable event summary.",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp.",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Additional event-specific data.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "An activity event for the activity feed, derived from agent sessions and file changes."
+    },
+    {
+      "name": "ActivityEventType",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "agent_started",
+        "agent_completed",
+        "agent_error",
+        "contract_created",
+        "contract_updated",
+        "test_run",
+        "file_changed",
+        "task_created",
+        "task_updated",
+        "session_started",
+        "session_ended"
+      ],
+      "inner_types": [],
+      "description": "Types of activity events."
+    },
+    {
+      "name": "ActivityEventList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "ActivityEvent",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of activity events."
+    },
+    {
+      "name": "TimeRange",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "start",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 start timestamp.",
+          "validators": []
+        },
+        {
+          "name": "end",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 end timestamp.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A time range filter for queries."
+    },
+    {
+      "name": "PaginationParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "limit",
+          "type_ref": "int",
+          "required": true,
+          "default": "50",
+          "description": "Maximum items to return.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..200",
+              "error_message": "Limit must be between 1 and 200."
+            }
+          ]
+        },
+        {
+          "name": "offset",
+          "type_ref": "int",
+          "required": true,
+          "default": "0",
+          "description": "Number of items to skip.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..100000",
+              "error_message": "Offset must be non-negative and at most 100000."
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Pagination parameters for list queries."
+    },
+    {
+      "name": "PaginatedResult",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "items",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "The page of items (type varies by endpoint).",
+          "validators": []
+        },
+        {
+          "name": "total",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total number of items matching the query.",
+          "validators": []
+        },
+        {
+          "name": "limit",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Limit used for this page.",
+          "validators": []
+        },
+        {
+          "name": "offset",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Offset used for this page.",
+          "validators": []
+        },
+        {
+          "name": "hasMore",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether more items exist beyond this page.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A paginated list result with total count."
+    },
+    {
+      "name": "SafePath",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "absolute",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "The resolved absolute path.",
+          "validators": []
+        },
+        {
+          "name": "relative",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path relative to the base directory.",
+          "validators": []
+        },
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "The base directory this path was validated against.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A validated filesystem path guaranteed free of directory traversal. Created only through validatePath."
+    },
+    {
+      "name": "DbMigration",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Migration sequence number.",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Migration name.",
+          "validators": []
+        },
+        {
+          "name": "appliedAt",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp when migration was applied.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A database migration record."
+    },
+    {
+      "name": "DbMigrationList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "DbMigration",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of applied migrations."
+    }
+  ],
+  "functions": [
+    {
+      "name": "validatePath",
+      "description": "Validates and resolves a file path against a base directory, preventing directory traversal attacks. Returns SafePath on success or error if path escapes base directory.",
+      "inputs": [
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "The trusted base directory.",
+          "validators": []
+        },
+        {
+          "name": "relativePath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "The untrusted relative path to validate.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "traversal_detected",
+          "condition": "Resolved path is outside baseDir",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "permission_denied"
+          }
+        },
+        {
+          "name": "base_not_absolute",
+          "condition": "baseDir is not an absolute path",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        }
+      ],
+      "preconditions": [
+        "baseDir must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, SafePath.absolute starts with SafePath.baseDir",
+        "On success, SafePath.relative contains no '..' segments"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "readFileRaw",
+      "description": "Tier 2 internal: Reads a file's contents as a UTF-8 string using try-read-catch-ENOENT. Returns Result<str>. Not part of public facade.",
+      "inputs": [
+        {
+          "name": "filePath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the file to read.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "file_not_found",
+          "condition": "File does not exist (ENOENT)",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "permission_denied",
+          "condition": "Process lacks read permission (EACCES)",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "permission_denied"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Any other filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "filePath must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value is the file contents as a string"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "filePath parameter",
+          "description": "Reads file contents from filesystem"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "readDirectoryEntries",
+      "description": "Tier 2 internal: Lists entries in a directory. Returns Result<list of str> with entry names (not full paths).",
+      "inputs": [
+        {
+          "name": "dirPath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the directory.",
+          "validators": []
+        },
+        {
+          "name": "filterExtension",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional file extension filter (e.g., '.json'). Empty string means no filter.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "dir_not_found",
+          "condition": "Directory does not exist (ENOENT)",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "not_a_directory",
+          "condition": "Path exists but is not a directory",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "permission_denied",
+          "condition": "Process lacks read permission",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "permission_denied"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Any other filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "dirPath must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value is a list of entry name strings"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "dirPath parameter",
+          "description": "Reads directory listing from filesystem"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "parseOpenClawConfig",
+      "description": "Tier 2 parser (pure): Parses unknown data as OpenClaw config using Zod .safeParse(). No I/O.",
+      "inputs": [
+        {
+          "name": "data",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Raw parsed JSON data (unknown type).",
+          "validators": []
+        },
+        {
+          "name": "sourceFilePath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "File path for error context (not read, just for error messages).",
+          "validators": []
+        },
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Base directory to resolve relative workspace paths.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "malformed_data",
+          "condition": "Data does not match OpenClaw config Zod schema",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "empty_data",
+          "condition": "Data is null, undefined, or empty object",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "empty"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, value is a valid OpenClawConfig",
+        "On success, all agent workspaceDir paths are resolved to absolute paths"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 5,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "parsePactYaml",
+      "description": "Tier 2 parser (pure): Parses raw YAML string as pact.yaml config using js-yaml safeLoad + Zod. No I/O.",
+      "inputs": [
+        {
+          "name": "yamlContent",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Raw YAML string content.",
+          "validators": []
+        },
+        {
+          "name": "sourceFilePath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "File path for error context.",
+          "validators": []
+        },
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Base directory for resolving relative paths.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "invalid_yaml",
+          "condition": "YAML syntax error in content",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "schema_mismatch",
+          "condition": "Parsed YAML does not match pact.yaml Zod schema",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "empty_content",
+          "condition": "YAML content is empty or whitespace-only",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "empty"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, value is a valid PactProjectConfig"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 10,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "parsePactContract",
+      "description": "Tier 2 parser (pure): Parses raw JSON/YAML data as a PACT contract. No I/O.",
+      "inputs": [
+        {
+          "name": "data",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Raw parsed data (unknown type).",
+          "validators": []
+        },
+        {
+          "name": "sourceFilePath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "File path for error context.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "malformed_contract",
+          "condition": "Data does not match contract Zod schema",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "empty_data",
+          "condition": "Data is null or empty",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "empty"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, value is a valid PactContract"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 2,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "parseSessionCostData",
+      "description": "Tier 2 parser (pure): Parses raw JSON data from an agent session file to extract token/cost data. No I/O.",
+      "inputs": [
+        {
+          "name": "data",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Raw parsed JSON session data.",
+          "validators": []
+        },
+        {
+          "name": "sourceFilePath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "File path for error context.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "malformed_session",
+          "condition": "Data does not match session Zod schema",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "empty_data",
+          "condition": "Data is null or empty",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "empty"
+          }
+        },
+        {
+          "name": "missing_cost_fields",
+          "condition": "Session data exists but lacks token/cost fields",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, value is a valid CostRecord"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 2,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "parseDecompositionTree",
+      "description": "Tier 2 parser (pure): Parses decomposition directory structure data into a component tree. Takes a map of file paths to content.",
+      "inputs": [
+        {
+          "name": "fileEntries",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Map of relative file path -> raw file content for all files in decomposition/ directory.",
+          "validators": []
+        },
+        {
+          "name": "contractStatuses",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Map of componentId -> ContractStatus string for cross-referencing.",
+          "validators": []
+        },
+        {
+          "name": "implementedComponents",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of componentId strings that have source in src/.",
+          "validators": []
+        },
+        {
+          "name": "testedComponents",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of componentId strings that have tests in tests/.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "malformed_decomposition",
+          "condition": "File contents cannot be parsed as decomposition nodes",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "empty_decomposition",
+          "condition": "No files provided in fileEntries",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "empty"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, value is a ComponentNodeList representing the root nodes of the tree",
+        "Every node's contractStatus matches contractStatuses map or defaults to 'missing'"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 20,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "derivePipelinePhase",
+      "description": "Tier 2 utility (pure): Derives the current pipeline phase from directory existence and content counts.",
+      "inputs": [
+        {
+          "name": "hasDecomposition",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether decomposition/ directory has content.",
+          "validators": []
+        },
+        {
+          "name": "totalComponents",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total components in decomposition.",
+          "validators": []
+        },
+        {
+          "name": "contractedCount",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Components with contracts.",
+          "validators": []
+        },
+        {
+          "name": "implementedCount",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Components with source code.",
+          "validators": []
+        },
+        {
+          "name": "testedCount",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Components with passing tests.",
+          "validators": []
+        }
+      ],
+      "output_type": "PipelinePhase",
+      "error_cases": [],
+      "preconditions": [
+        "All counts are non-negative",
+        "contractedCount <= totalComponents",
+        "implementedCount <= totalComponents",
+        "testedCount <= totalComponents"
+      ],
+      "postconditions": [
+        "Returns 'not_started' if no decomposition and all counts are 0",
+        "Returns 'complete' if testedCount == totalComponents and totalComponents > 0"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "getOpenClawConfig",
+      "description": "Facade: Reads and parses the OpenClaw configuration from openclaw.json at the given base directory. Cached with TTL.",
+      "inputs": [
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the OpenClaw project root containing openclaw.json.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "config_not_found",
+          "condition": "openclaw.json does not exist at baseDir",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "config_malformed",
+          "condition": "openclaw.json exists but fails Zod validation",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "config_empty",
+          "condition": "openclaw.json exists but is empty",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "empty"
+          }
+        },
+        {
+          "name": "permission_denied",
+          "condition": "Cannot read openclaw.json due to permissions",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "permission_denied"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Unexpected filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "baseDir must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value is a valid OpenClawConfig with all paths resolved"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "baseDir/openclaw.json",
+          "description": "Reads OpenClaw config file from filesystem"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "getAgent",
+      "description": "Facade: Gets a single agent definition by ID from the OpenClaw config.",
+      "inputs": [
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the OpenClaw project root.",
+          "validators": []
+        },
+        {
+          "name": "agentId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "The agent ID to look up.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "agent_not_found",
+          "condition": "No agent with given ID exists in config",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "config_not_found",
+          "condition": "openclaw.json does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "config_malformed",
+          "condition": "openclaw.json fails validation",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        }
+      ],
+      "preconditions": [
+        "baseDir must be an absolute path",
+        "agentId must be non-empty"
+      ],
+      "postconditions": [
+        "On success, value is a valid AgentDefinition"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "baseDir/openclaw.json",
+          "description": "Reads OpenClaw config to find agent"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "listAgents",
+      "description": "Facade: Lists all agent definitions from the OpenClaw config.",
+      "inputs": [
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the OpenClaw project root.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "config_not_found",
+          "condition": "openclaw.json does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "config_malformed",
+          "condition": "openclaw.json fails validation",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Unexpected filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "baseDir must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value is an AgentList (may be empty if config has no agents)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "baseDir/openclaw.json",
+          "description": "Reads OpenClaw config to list agents"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "getProject",
+      "description": "Facade: Reads and assembles a full PACT project summary from a project directory. Composes parsers for pact.yaml, decomposition/, contracts/, tests/, and src/.",
+      "inputs": [
+        {
+          "name": "projectDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the PACT project root containing pact.yaml.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "project_not_found",
+          "condition": "pact.yaml does not exist at projectDir",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "project_malformed",
+          "condition": "pact.yaml exists but fails validation",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "project_empty",
+          "condition": "pact.yaml is empty",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "empty"
+          }
+        },
+        {
+          "name": "permission_denied",
+          "condition": "Cannot read project directory or files",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "permission_denied"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Unexpected filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "projectDir must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value is a complete PactProjectSummary",
+        "totalComponents, contractedCount, implementedCount, testedCount are consistent with componentTree"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "projectDir/pact.yaml",
+          "description": "Reads PACT project config"
+        },
+        {
+          "kind": "reads_file",
+          "target": "projectDir/decomposition/",
+          "description": "Reads decomposition directory"
+        },
+        {
+          "kind": "reads_file",
+          "target": "projectDir/contracts/",
+          "description": "Reads contracts directory"
+        },
+        {
+          "kind": "reads_file",
+          "target": "projectDir/tests/",
+          "description": "Reads test results"
+        },
+        {
+          "kind": "reads_file",
+          "target": "projectDir/src/",
+          "description": "Scans source directory for implementation status"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 500,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "listProjects",
+      "description": "Facade: Discovers and summarizes all PACT projects under a base directory. Each subdirectory containing pact.yaml is treated as a project.",
+      "inputs": [
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the directory containing PACT project subdirectories.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "base_not_found",
+          "condition": "Base directory does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "permission_denied",
+          "condition": "Cannot read base directory",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "permission_denied"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Unexpected filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "baseDir must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value is a PactProjectSummaryList",
+        "Projects with malformed pact.yaml are excluded from the list (logged, not thrown)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "baseDir and all pact.yaml files in subdirectories",
+          "description": "Scans directory tree for PACT projects"
+        },
+        {
+          "kind": "logging",
+          "target": "console",
+          "description": "Logs warnings for malformed projects that are skipped"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 2000,
+        "max_memory_mb": null,
+        "complexity": "O(n*m)"
+      }
+    },
+    {
+      "name": "getProjectPipelineStatus",
+      "description": "Facade: Returns just the pipeline phase and high-level counts for a project. Lighter weight than full getProject.",
+      "inputs": [
+        {
+          "name": "projectDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the PACT project root.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "project_not_found",
+          "condition": "pact.yaml does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Unexpected filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "projectDir must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value contains phase, totalComponents, contractedCount, implementedCount, testedCount"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "projectDir subdirectories",
+          "description": "Reads directory listings to derive phase"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "getProjectContracts",
+      "description": "Facade: Lists all PACT contracts in a project's contracts/ directory.",
+      "inputs": [
+        {
+          "name": "projectDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the PACT project root.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "contracts_dir_not_found",
+          "condition": "contracts/ directory does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Unexpected filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "projectDir must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value is a PactContractList"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "projectDir/contracts/",
+          "description": "Reads all contract files in contracts/ directory"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 300,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "getProjectTestResults",
+      "description": "Facade: Aggregates test results for all components in a project.",
+      "inputs": [
+        {
+          "name": "projectDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the PACT project root.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "tests_dir_not_found",
+          "condition": "tests/ directory does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Unexpected filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "projectDir must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value is a PactTestSuiteList"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "projectDir/tests/",
+          "description": "Reads test result files"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 300,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "getProjectComponentTree",
+      "description": "Facade: Returns the component decomposition tree for a project.",
+      "inputs": [
+        {
+          "name": "projectDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the PACT project root.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "decomposition_not_found",
+          "condition": "decomposition/ directory does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "malformed_decomposition",
+          "condition": "Decomposition files cannot be parsed",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Unexpected filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "projectDir must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value is a ComponentNodeList of root-level nodes"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "projectDir/decomposition/",
+          "description": "Reads decomposition files"
+        },
+        {
+          "kind": "reads_file",
+          "target": "projectDir/contracts/",
+          "description": "Reads contracts for status cross-reference"
+        },
+        {
+          "kind": "reads_file",
+          "target": "projectDir/src/",
+          "description": "Checks source existence"
+        },
+        {
+          "kind": "reads_file",
+          "target": "projectDir/tests/",
+          "description": "Checks test existence"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 400,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "getCostRecords",
+      "description": "Facade: Reads token/cost data from agent session files for a given time range.",
+      "inputs": [
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the OpenClaw project root (session files are in agent workspace dirs).",
+          "validators": []
+        },
+        {
+          "name": "timeRange",
+          "type_ref": "TimeRange",
+          "required": false,
+          "default": "",
+          "description": "Time range filter for cost records.",
+          "validators": []
+        },
+        {
+          "name": "agentId",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional agent ID filter. Empty string means all agents.",
+          "validators": []
+        },
+        {
+          "name": "projectId",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional project ID filter. Empty string means all projects.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "config_not_found",
+          "condition": "openclaw.json not found (needed to discover agent workspaces)",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "no_sessions",
+          "condition": "No session files found matching criteria",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "empty"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Unexpected filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "baseDir must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value is a CostRecordList sorted by startedAt descending",
+        "All records fall within timeRange if provided"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "Agent workspace session JSON files",
+          "description": "Reads session files from each agent's workspace directory"
+        },
+        {
+          "kind": "logging",
+          "target": "console",
+          "description": "Logs warnings for malformed session files that are skipped"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1000,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "getCostSummary",
+      "description": "Facade: Aggregates cost records into a summary over a time range.",
+      "inputs": [
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the OpenClaw project root.",
+          "validators": []
+        },
+        {
+          "name": "timeRange",
+          "type_ref": "TimeRange",
+          "required": true,
+          "default": "",
+          "description": "Time range for aggregation.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "config_not_found",
+          "condition": "openclaw.json not found",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "no_data",
+          "condition": "No cost records found in time range",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "empty"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Unexpected filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "baseDir must be an absolute path",
+        "timeRange.start must be before timeRange.end"
+      ],
+      "postconditions": [
+        "On success, value is a valid CostSummary",
+        "totalCostUsd equals sum of all individual record costs",
+        "byAgent keys are a subset of known agent IDs"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "Agent workspace session JSON files",
+          "description": "Reads session files for cost aggregation"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1500,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "getActivityFeed",
+      "description": "Facade: Returns recent activity events from agent sessions and file changes, ordered by timestamp descending.",
+      "inputs": [
+        {
+          "name": "baseDir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute path to the OpenClaw project root.",
+          "validators": []
+        },
+        {
+          "name": "pagination",
+          "type_ref": "PaginationParams",
+          "required": false,
+          "default": "",
+          "description": "Pagination parameters.",
+          "validators": []
+        },
+        {
+          "name": "agentId",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional agent ID filter.",
+          "validators": []
+        },
+        {
+          "name": "projectId",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional project ID filter.",
+          "validators": []
+        },
+        {
+          "name": "eventTypes",
+          "type_ref": "list",
+          "required": false,
+          "default": "",
+          "description": "Optional list of ActivityEventType strings to filter by. Empty list means all types.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "config_not_found",
+          "condition": "openclaw.json not found",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "io_error",
+          "condition": "Unexpected filesystem error",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "baseDir must be an absolute path"
+      ],
+      "postconditions": [
+        "On success, value is a PaginatedResult with items of type ActivityEventList",
+        "Events are sorted by timestamp descending"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "Agent workspace session files and project directories",
+          "description": "Reads multiple sources to compose activity feed"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 500,
+        "max_memory_mb": null,
+        "complexity": "O(n log n)"
+      }
+    },
+    {
+      "name": "initDatabase",
+      "description": "SQLite: Initializes the SQLite database, runs migrations, and enables WAL mode. Must be called once at application startup.",
+      "inputs": [
+        {
+          "name": "dbPath",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to the SQLite database file. Use ':memory:' for in-memory test databases.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "db_create_failed",
+          "condition": "Cannot create or open database file",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        },
+        {
+          "name": "migration_failed",
+          "condition": "A migration SQL statement failed",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "permission_denied",
+          "condition": "Cannot write to database path",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "permission_denied"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On success, database is ready for queries",
+        "WAL mode is enabled (unless :memory:)",
+        "All migration files have been applied in order",
+        "migrations table exists and records applied migrations"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "dbPath",
+          "description": "Creates/opens SQLite database file and runs migrations"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database schema",
+          "description": "Applies pending migrations"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 500,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "closeDatabase",
+      "description": "SQLite: Closes the database connection gracefully.",
+      "inputs": [],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "not_initialized",
+          "condition": "Database was never initialized",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Database must have been initialized via initDatabase"
+      ],
+      "postconditions": [
+        "Database connection is closed",
+        "No further queries can be made until re-initialized"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database connection",
+          "description": "Closes the database connection"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "getAppliedMigrations",
+      "description": "SQLite: Returns list of applied database migrations.",
+      "inputs": [],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "not_initialized",
+          "condition": "Database was never initialized",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Database must be initialized"
+      ],
+      "postconditions": [
+        "On success, value is a DbMigrationList ordered by id ascending"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite database",
+          "description": "Queries migrations table"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createTask",
+      "description": "SQLite Facade: Creates a new user task in SQLite.",
+      "inputs": [
+        {
+          "name": "input",
+          "type_ref": "CreateTaskInput",
+          "required": true,
+          "default": "",
+          "description": "Task creation parameters, validated with Zod.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "validation_failed",
+          "condition": "Input fails Zod schema validation",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite insert fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Database must be initialized",
+        "input must pass Zod validation"
+      ],
+      "postconditions": [
+        "On success, value is the created UserTask with generated id, createdAt, updatedAt",
+        "Task status defaults to 'todo'",
+        "id is a UUID v4"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite tasks table",
+          "description": "Inserts a new task row"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "getTask",
+      "description": "SQLite Facade: Retrieves a single task by ID.",
+      "inputs": [
+        {
+          "name": "taskId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID of the task to retrieve.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "task_not_found",
+          "condition": "No task with given ID exists",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite query fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Database must be initialized",
+        "taskId must be non-empty"
+      ],
+      "postconditions": [
+        "On success, value is a valid UserTask"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite tasks table",
+          "description": "Queries task by ID"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "listTasks",
+      "description": "SQLite Facade: Lists tasks with optional filters and pagination.",
+      "inputs": [
+        {
+          "name": "pagination",
+          "type_ref": "PaginationParams",
+          "required": false,
+          "default": "",
+          "description": "Pagination parameters.",
+          "validators": []
+        },
+        {
+          "name": "projectId",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional project ID filter.",
+          "validators": []
+        },
+        {
+          "name": "assignedAgentId",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional agent ID filter.",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional TaskStatus filter. Empty string means all statuses.",
+          "validators": []
+        },
+        {
+          "name": "priority",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional TaskPriority filter. Empty string means all priorities.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "db_error",
+          "condition": "SQLite query fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        },
+        {
+          "name": "invalid_filter",
+          "condition": "status or priority filter is not a valid enum value",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        }
+      ],
+      "preconditions": [
+        "Database must be initialized"
+      ],
+      "postconditions": [
+        "On success, value is a PaginatedResult with items of type UserTaskList",
+        "Results are ordered by createdAt descending"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite tasks table",
+          "description": "Queries tasks with filters"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "updateTask",
+      "description": "SQLite Facade: Updates an existing task. Only provided fields are updated.",
+      "inputs": [
+        {
+          "name": "taskId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID of the task to update.",
+          "validators": []
+        },
+        {
+          "name": "input",
+          "type_ref": "UpdateTaskInput",
+          "required": true,
+          "default": "",
+          "description": "Fields to update, validated with Zod.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "task_not_found",
+          "condition": "No task with given ID exists",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "validation_failed",
+          "condition": "Input fails Zod schema validation",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite update fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Database must be initialized",
+        "taskId must be non-empty"
+      ],
+      "postconditions": [
+        "On success, value is the updated UserTask",
+        "updatedAt is set to current timestamp",
+        "If status changes to 'done', completedAt is set to current timestamp",
+        "If status changes from 'done' to another status, completedAt is cleared"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite tasks table",
+          "description": "Updates task row"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "deleteTask",
+      "description": "SQLite Facade: Deletes a task by ID.",
+      "inputs": [
+        {
+          "name": "taskId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID of the task to delete.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "task_not_found",
+          "condition": "No task with given ID exists",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "not_found"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite delete fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Database must be initialized",
+        "taskId must be non-empty"
+      ],
+      "postconditions": [
+        "On success, value is the deleted UserTask (returned before deletion)",
+        "Task no longer exists in database"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite tasks table",
+          "description": "Deletes task row"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "getUserPreferences",
+      "description": "SQLite Facade: Gets user preferences, creating default if not exists.",
+      "inputs": [
+        {
+          "name": "userId",
+          "type_ref": "str",
+          "required": false,
+          "default": "default",
+          "description": "User identifier. Default: 'default'.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "db_error",
+          "condition": "SQLite query/insert fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Database must be initialized"
+      ],
+      "postconditions": [
+        "On success, value is a valid UserPreferences",
+        "If no preferences exist, returns defaults and persists them"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite preferences table",
+          "description": "Queries user preferences"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite preferences table",
+          "description": "May insert default preferences if none exist"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 20,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "updateUserPreferences",
+      "description": "SQLite Facade: Updates user preferences. Merges with existing preferences.",
+      "inputs": [
+        {
+          "name": "userId",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "User identifier.",
+          "validators": []
+        },
+        {
+          "name": "updates",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Partial UserPreferences fields to update (validated with Zod).",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "validation_failed",
+          "condition": "Updates contain invalid field values",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "malformed"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite update fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "io_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "Database must be initialized",
+        "userId must be non-empty"
+      ],
+      "postconditions": [
+        "On success, value is the complete updated UserPreferences"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite preferences table",
+          "description": "Updates preference row"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 20,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "invalidateCache",
+      "description": "Cache: Invalidates cache entries. Can target specific keys, key prefixes, or clear all.",
+      "inputs": [
+        {
+          "name": "key",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Exact cache key to invalidate. Empty string means use prefix or clear all.",
+          "validators": []
+        },
+        {
+          "name": "prefix",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Key prefix to invalidate (all keys starting with this prefix). Empty string and empty key means clear all.",
+          "validators": []
+        }
+      ],
+      "output_type": "int",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "Returns count of entries invalidated",
+        "Invalidated entries are immediately removed from cache"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "In-memory cache Map",
+          "description": "Removes entries from the TTL cache"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 5,
+        "max_memory_mb": null,
+        "complexity": "O(n)"
+      }
+    },
+    {
+      "name": "getCacheStats",
+      "description": "Cache: Returns current cache statistics.",
+      "inputs": [],
+      "output_type": "CacheStats",
+      "error_cases": [],
+      "preconditions": [],
+      "postconditions": [
+        "All counts are non-negative"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    }
+  ],
+  "dependencies": [],
+  "dependency_contracts": {},
+  "invariants": [
+    "Components and API routes MUST import only from lib/data/ facade — never from lib/openclaw/, lib/pact/, or lib/db/ directly",
+    "All filesystem reads use try-read-catch-ENOENT pattern — never fs.existsSync or fs.access before reading",
+    "All external data (files, CLI output) is validated through Zod .safeParse() before entering the domain",
+    "All date/time values are represented as ISO 8601 strings (YYYY-MM-DDTHH:mm:ss.sssZ)",
+    "All Result error variants carry the originating file path and original error message for debugging",
+    "SQLite database operates in WAL mode for concurrent read performance",
+    "Base directory paths are always function parameters — never hardcoded or read from env inside parsers",
+    "Parse functions are pure (no I/O) and can be tested with inline fixture data",
+    "Read functions are async and perform filesystem I/O, returning Result<unknown>",
+    "No 'any' types — use 'unknown' + type narrowing via Zod",
+    "Cache entries have explicit TTL and can be invalidated programmatically via invalidateCache",
+    "File paths are validated to prevent directory traversal (no '..' components after resolution)",
+    "All public facade functions are async, even if underlying implementation is synchronous, for API uniformity"
+  ],
+  "requires": [
+    "better-sqlite3",
+    "js-yaml",
+    "zod",
+    "chokidar",
+    "fs/promises"
+  ],
+  "processing_register": "pragmatic-implementation"
+}

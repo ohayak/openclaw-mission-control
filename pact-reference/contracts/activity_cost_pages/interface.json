@@ -1,0 +1,2809 @@
+{
+  "component_id": "activity_cost_pages",
+  "name": "Activity Feed & Cost Tracking Pages",
+  "description": "Activity feed full page: chronological event list auto-updating via SSE (useEventSource hook), filterable by agent/project/event type (AC7). Cost & Token dashboard page: per-project and per-agent cost breakdown bar charts, token usage over time line charts (recharts), budget alert configuration stored in SQLite. Gracefully shows 'no data available' placeholder UI when token/cost data is missing from filesystem (AC8). Overview/home dashboard page that aggregates: agent count + status summary cards, active projects count, PACT health snapshot, last 10 activity events, cost burn rate. Uses Zod-first approach where Zod schemas are single source of truth with TypeScript types inferred via z.infer. All timestamps ISO 8601 strings. All monetary values as integer microdollars (1 USD = 1,000,000 microdollars) formatted to dollars only at UI presentation layer.",
+  "version": 1,
+  "types": [
+    {
+      "name": "ActivityEventType",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "agent.started",
+        "agent.stopped",
+        "agent.error",
+        "agent.idle",
+        "task.created",
+        "task.assigned",
+        "task.completed",
+        "task.failed",
+        "task.cancelled",
+        "project.created",
+        "project.updated",
+        "project.archived",
+        "pact.approval_requested",
+        "pact.approved",
+        "pact.rejected",
+        "pact.timed_out",
+        "cost.threshold_crossed",
+        "cost.budget_exceeded",
+        "system.sse_connected",
+        "system.sse_reconnected"
+      ],
+      "inner_types": [],
+      "description": "Dot-notation taxonomy of all activity event types, used as discriminant for ActivityEvent union."
+    },
+    {
+      "name": "DataResultStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "ok",
+        "empty",
+        "error"
+      ],
+      "inner_types": [],
+      "description": "Status discriminant for DataResult<T> wrapper. 'ok' = data present, 'empty' = no data found (graceful empty state for AC8), 'error' = retrieval failed."
+    },
+    {
+      "name": "DataResultOk",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "status",
+          "type_ref": "DataResultStatus",
+          "required": true,
+          "default": "",
+          "description": "Always 'ok'.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "status === 'ok'",
+              "error_message": "Status must be 'ok' for DataResultOk"
+            }
+          ]
+        },
+        {
+          "name": "data",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "The successfully retrieved data payload. Generic T in implementation; typed per usage site via Zod schema inference.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "DataResult variant when data is successfully retrieved."
+    },
+    {
+      "name": "DataResultEmpty",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "status",
+          "type_ref": "DataResultStatus",
+          "required": true,
+          "default": "",
+          "description": "Always 'empty'.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "status === 'empty'",
+              "error_message": "Status must be 'empty' for DataResultEmpty"
+            }
+          ]
+        },
+        {
+          "name": "reason",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable reason why data is empty, e.g. 'No cost data files found for project X'.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "DataResult variant when no data is available (e.g., filesystem cost files missing). Used to trigger 'no data available' placeholder UI (AC8)."
+    },
+    {
+      "name": "DataResultError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "status",
+          "type_ref": "DataResultStatus",
+          "required": true,
+          "default": "",
+          "description": "Always 'error'.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "status === 'error'",
+              "error_message": "Status must be 'error' for DataResultError"
+            }
+          ]
+        },
+        {
+          "name": "error_code",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Machine-readable error code, e.g. 'FILE_READ_FAILED', 'PARSE_ERROR', 'DB_QUERY_FAILED'.",
+          "validators": []
+        },
+        {
+          "name": "error_message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error description.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "DataResult variant when data retrieval failed due to an error."
+    },
+    {
+      "name": "DataResult",
+      "kind": "union",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "DataResultOk",
+        "DataResultEmpty",
+        "DataResultError"
+      ],
+      "description": "Generic wrapper with 'ok' | 'empty' | 'error' status for graceful empty states. All data layer functions return this. Discriminated on 'status' field."
+    },
+    {
+      "name": "ActivityEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique event ID (UUID v4). Used for SSE deduplication via lastEventId.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "error_message": "Event ID must be a valid UUID v4"
+            }
+          ]
+        },
+        {
+          "name": "type",
+          "type_ref": "ActivityEventType",
+          "required": true,
+          "default": "",
+          "description": "Dot-notation event type, used as discriminant for event-specific payloads.",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp of when the event occurred.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+              "error_message": "Timestamp must be ISO 8601 format"
+            }
+          ]
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ID of the agent that generated this event, if applicable.",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ID of the project this event relates to, if applicable.",
+          "validators": []
+        },
+        {
+          "name": "task_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ID of the task this event relates to, if applicable.",
+          "validators": []
+        },
+        {
+          "name": "summary",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable one-line summary of the event.",
+          "validators": []
+        },
+        {
+          "name": "details",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Event-type-specific structured details. Schema varies by event type; validated per-type via Zod discriminated union.",
+          "validators": []
+        },
+        {
+          "name": "severity",
+          "type_ref": "EventSeverity",
+          "required": false,
+          "default": "info",
+          "description": "Event severity level for visual treatment in the feed.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single activity event in the chronological feed. Parsed from filesystem event logs via Zod schema. IDs are UUIDs for SSE deduplication."
+    },
+    {
+      "name": "EventSeverity",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "info",
+        "warning",
+        "error",
+        "success"
+      ],
+      "inner_types": [],
+      "description": "Severity level for activity events, controls visual treatment in the UI feed."
+    },
+    {
+      "name": "ActivityFilter",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent_ids",
+          "type_ref": "StringList",
+          "required": false,
+          "default": "",
+          "description": "Filter to events from these agent IDs. Empty or omitted = all agents.",
+          "validators": []
+        },
+        {
+          "name": "project_ids",
+          "type_ref": "StringList",
+          "required": false,
+          "default": "",
+          "description": "Filter to events for these project IDs. Empty or omitted = all projects.",
+          "validators": []
+        },
+        {
+          "name": "event_types",
+          "type_ref": "ActivityEventTypeList",
+          "required": false,
+          "default": "",
+          "description": "Filter to these event types. Empty or omitted = all types.",
+          "validators": []
+        },
+        {
+          "name": "severity",
+          "type_ref": "EventSeverityList",
+          "required": false,
+          "default": "",
+          "description": "Filter by severity levels. Empty or omitted = all severities.",
+          "validators": []
+        },
+        {
+          "name": "since",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Only events after this ISO 8601 timestamp.",
+          "validators": []
+        },
+        {
+          "name": "until",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Only events before this ISO 8601 timestamp.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "First-class filter object for the activity feed. Used both in API query params (validated via Zod) and in SSE subscription filters."
+    },
+    {
+      "name": "StringList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "str",
+      "variants": [],
+      "inner_types": [],
+      "description": "A list of strings."
+    },
+    {
+      "name": "ActivityEventTypeList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "ActivityEventType",
+      "variants": [],
+      "inner_types": [],
+      "description": "A list of ActivityEventType enum values for filtering."
+    },
+    {
+      "name": "EventSeverityList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "EventSeverity",
+      "variants": [],
+      "inner_types": [],
+      "description": "A list of EventSeverity enum values for filtering."
+    },
+    {
+      "name": "CursorPagination",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "cursor",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Event ID cursor for pagination. Empty string or omitted = start from most recent.",
+          "validators": []
+        },
+        {
+          "name": "limit",
+          "type_ref": "int",
+          "required": false,
+          "default": "50",
+          "description": "Maximum number of items to return per page.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..200",
+              "error_message": "Limit must be between 1 and 200"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Cursor-based pagination parameters. Cursor is the event ID of the last item in the previous page."
+    },
+    {
+      "name": "ActivityEventList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "ActivityEvent",
+      "variants": [],
+      "inner_types": [],
+      "description": "Ordered list of activity events (most recent first)."
+    },
+    {
+      "name": "ActivityFeedResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "events",
+          "type_ref": "ActivityEventList",
+          "required": true,
+          "default": "",
+          "description": "Activity events for the current page, ordered most recent first.",
+          "validators": []
+        },
+        {
+          "name": "next_cursor",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Cursor for the next page. Empty string if no more pages.",
+          "validators": []
+        },
+        {
+          "name": "has_more",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether there are more events beyond this page.",
+          "validators": []
+        },
+        {
+          "name": "total_count",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Total count of events matching the filter, if available. May be omitted for performance on large datasets.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Cursor-paginated activity feed API response."
+    },
+    {
+      "name": "CostRecord",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique cost record ID.",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp of the invocation.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+              "error_message": "Timestamp must be ISO 8601 format"
+            }
+          ]
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Agent that incurred this cost.",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project the cost is attributed to.",
+          "validators": []
+        },
+        {
+          "name": "model",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "LLM model identifier, e.g. 'claude-sonnet-4-20250514'.",
+          "validators": []
+        },
+        {
+          "name": "input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of input/prompt tokens.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..999999999",
+              "error_message": "Input tokens must be non-negative"
+            }
+          ]
+        },
+        {
+          "name": "output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of output/completion tokens.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..999999999",
+              "error_message": "Output tokens must be non-negative"
+            }
+          ]
+        },
+        {
+          "name": "cost_microdollars",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Cost in microdollars (1 USD = 1,000,000). Integer to avoid floating-point precision issues.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..999999999999",
+              "error_message": "Cost must be non-negative microdollars"
+            }
+          ]
+        },
+        {
+          "name": "session_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "OpenClaw session ID, if available.",
+          "validators": []
+        },
+        {
+          "name": "task_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Task ID this invocation was part of, if available.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single per-invocation cost record. Read from filesystem cost logs. All monetary values in integer microdollars (1 USD = 1,000,000 microdollars)."
+    },
+    {
+      "name": "TokenUsage",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "period_start",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp for start of this aggregation period.",
+          "validators": []
+        },
+        {
+          "name": "period_end",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp for end of this aggregation period.",
+          "validators": []
+        },
+        {
+          "name": "input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total input tokens in this period.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..999999999999",
+              "error_message": "Input tokens must be non-negative"
+            }
+          ]
+        },
+        {
+          "name": "output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total output tokens in this period.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..999999999999",
+              "error_message": "Output tokens must be non-negative"
+            }
+          ]
+        },
+        {
+          "name": "total_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Sum of input + output tokens.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..999999999999",
+              "error_message": "Total tokens must be non-negative"
+            }
+          ]
+        },
+        {
+          "name": "invocation_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of LLM invocations in this period.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..999999999",
+              "error_message": "Invocation count must be non-negative"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Aggregated token usage for a time period. Used in token usage charts."
+    },
+    {
+      "name": "BudgetAlert",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique alert ID (UUID v4).",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "error_message": "Alert ID must be a valid UUID v4"
+            }
+          ]
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "User-defined alert name.",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..200",
+              "error_message": "Alert name must be between 1 and 200 characters"
+            }
+          ]
+        },
+        {
+          "name": "scope_type",
+          "type_ref": "BudgetAlertScopeType",
+          "required": true,
+          "default": "",
+          "description": "Whether this alert applies to a specific project, agent, or globally.",
+          "validators": []
+        },
+        {
+          "name": "scope_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "The project_id or agent_id this alert scopes to. Empty for global scope.",
+          "validators": []
+        },
+        {
+          "name": "threshold_microdollars",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Spending threshold in microdollars. Alert fires when cumulative cost crosses this value.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..999999999999",
+              "error_message": "Threshold must be a positive value in microdollars"
+            }
+          ]
+        },
+        {
+          "name": "period",
+          "type_ref": "BudgetAlertPeriod",
+          "required": true,
+          "default": "",
+          "description": "Time period over which spending is aggregated for threshold comparison.",
+          "validators": []
+        },
+        {
+          "name": "enabled",
+          "type_ref": "bool",
+          "required": true,
+          "default": "true",
+          "description": "Whether this alert is currently active.",
+          "validators": []
+        },
+        {
+          "name": "last_triggered_at",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ISO 8601 timestamp of when this alert last fired. Used for debounce to avoid repeated notifications.",
+          "validators": []
+        },
+        {
+          "name": "created_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp of alert creation.",
+          "validators": []
+        },
+        {
+          "name": "updated_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp of last alert modification.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Budget alert configuration stored in SQLite. Defines a spending threshold that triggers a notification when crossed."
+    },
+    {
+      "name": "BudgetAlertScopeType",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "global",
+        "project",
+        "agent"
+      ],
+      "inner_types": [],
+      "description": "Scope type for budget alerts."
+    },
+    {
+      "name": "BudgetAlertPeriod",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "daily",
+        "weekly",
+        "monthly",
+        "total"
+      ],
+      "inner_types": [],
+      "description": "Time period over which budget alert thresholds are evaluated."
+    },
+    {
+      "name": "BudgetAlertCreateInput",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "User-defined alert name.",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..200",
+              "error_message": "Alert name must be between 1 and 200 characters"
+            }
+          ]
+        },
+        {
+          "name": "scope_type",
+          "type_ref": "BudgetAlertScopeType",
+          "required": true,
+          "default": "",
+          "description": "Scope of the alert.",
+          "validators": []
+        },
+        {
+          "name": "scope_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "The project_id or agent_id. Required when scope_type is 'project' or 'agent'.",
+          "validators": []
+        },
+        {
+          "name": "threshold_microdollars",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Spending threshold in microdollars.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..999999999999",
+              "error_message": "Threshold must be a positive value in microdollars"
+            }
+          ]
+        },
+        {
+          "name": "period",
+          "type_ref": "BudgetAlertPeriod",
+          "required": true,
+          "default": "",
+          "description": "Aggregation period for threshold comparison.",
+          "validators": []
+        },
+        {
+          "name": "enabled",
+          "type_ref": "bool",
+          "required": false,
+          "default": "true",
+          "description": "Whether the alert is enabled on creation.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Input for creating a new budget alert. Validated via Zod schema."
+    },
+    {
+      "name": "BudgetAlertUpdateInput",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Updated alert name.",
+          "validators": []
+        },
+        {
+          "name": "threshold_microdollars",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Updated threshold.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..999999999999",
+              "error_message": "Threshold must be a positive value in microdollars"
+            }
+          ]
+        },
+        {
+          "name": "period",
+          "type_ref": "BudgetAlertPeriod",
+          "required": false,
+          "default": "",
+          "description": "Updated period.",
+          "validators": []
+        },
+        {
+          "name": "enabled",
+          "type_ref": "bool",
+          "required": false,
+          "default": "",
+          "description": "Updated enabled state.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Input for updating an existing budget alert. All fields optional (partial update)."
+    },
+    {
+      "name": "BudgetAlertList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "BudgetAlert",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of budget alert configurations."
+    },
+    {
+      "name": "BudgetAlertCrudResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "success",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether the operation succeeded.",
+          "validators": []
+        },
+        {
+          "name": "alert",
+          "type_ref": "BudgetAlert",
+          "required": false,
+          "default": "",
+          "description": "The created/updated/retrieved alert. Present on success for create/update/get operations.",
+          "validators": []
+        },
+        {
+          "name": "alerts",
+          "type_ref": "BudgetAlertList",
+          "required": false,
+          "default": "",
+          "description": "List of alerts. Present on success for list operations.",
+          "validators": []
+        },
+        {
+          "name": "deleted_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ID of the deleted alert. Present on success for delete operations.",
+          "validators": []
+        },
+        {
+          "name": "error",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Error message on failure.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Standard CRUD response for budget alert operations."
+    },
+    {
+      "name": "CostBreakdownEntry",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "entity_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "The project_id or agent_id.",
+          "validators": []
+        },
+        {
+          "name": "entity_name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable name of the project or agent.",
+          "validators": []
+        },
+        {
+          "name": "total_cost_microdollars",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total cost in microdollars for this entity.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..999999999999",
+              "error_message": "Cost must be non-negative"
+            }
+          ]
+        },
+        {
+          "name": "total_input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total input tokens.",
+          "validators": []
+        },
+        {
+          "name": "total_output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total output tokens.",
+          "validators": []
+        },
+        {
+          "name": "invocation_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total LLM invocations.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single entry in a cost breakdown (by project or by agent)."
+    },
+    {
+      "name": "CostBreakdownList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "CostBreakdownEntry",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of cost breakdown entries."
+    },
+    {
+      "name": "TimeBucketGranularity",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "hour",
+        "day",
+        "week",
+        "month"
+      ],
+      "inner_types": [],
+      "description": "Granularity for time-bucketed data series."
+    },
+    {
+      "name": "CostChartDataPoint",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "label",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "X-axis label (entity name for breakdown charts, time label for time series).",
+          "validators": []
+        },
+        {
+          "name": "cost_dollars",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Cost in dollars (converted from microdollars for display). This is the sole exception where dollar formatting occurs in the data transform layer rather than UI.",
+          "validators": []
+        },
+        {
+          "name": "cost_microdollars",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Cost in microdollars (original value for tooltip precision).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Flat object shaped for direct recharts consumption in cost bar charts."
+    },
+    {
+      "name": "CostChartDataPointList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "CostChartDataPoint",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of cost chart data points for recharts."
+    },
+    {
+      "name": "TokenChartDataPoint",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "label",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "X-axis label (time bucket label).",
+          "validators": []
+        },
+        {
+          "name": "input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Input tokens for this data point.",
+          "validators": []
+        },
+        {
+          "name": "output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Output tokens for this data point.",
+          "validators": []
+        },
+        {
+          "name": "total_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total tokens (input + output).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Flat object shaped for direct recharts consumption in token usage line charts."
+    },
+    {
+      "name": "TokenChartDataPointList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "TokenChartDataPoint",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of token chart data points for recharts."
+    },
+    {
+      "name": "TokenUsageList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "TokenUsage",
+      "variants": [],
+      "inner_types": [],
+      "description": "Time-bucketed token usage series."
+    },
+    {
+      "name": "CostTimeSeries",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "granularity",
+          "type_ref": "TimeBucketGranularity",
+          "required": true,
+          "default": "",
+          "description": "Time bucket granularity.",
+          "validators": []
+        },
+        {
+          "name": "cost_points",
+          "type_ref": "CostChartDataPointList",
+          "required": true,
+          "default": "",
+          "description": "Cost data points ordered chronologically.",
+          "validators": []
+        },
+        {
+          "name": "token_points",
+          "type_ref": "TokenChartDataPointList",
+          "required": true,
+          "default": "",
+          "description": "Token usage data points ordered chronologically.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Time-bucketed cost series for the cost dashboard."
+    },
+    {
+      "name": "CostDashboardResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "by_project",
+          "type_ref": "DataResult",
+          "required": true,
+          "default": "",
+          "description": "DataResult wrapping CostBreakdownList for per-project cost breakdown.",
+          "validators": []
+        },
+        {
+          "name": "by_agent",
+          "type_ref": "DataResult",
+          "required": true,
+          "default": "",
+          "description": "DataResult wrapping CostBreakdownList for per-agent cost breakdown.",
+          "validators": []
+        },
+        {
+          "name": "time_series",
+          "type_ref": "DataResult",
+          "required": true,
+          "default": "",
+          "description": "DataResult wrapping CostTimeSeries for time-bucketed cost and token series.",
+          "validators": []
+        },
+        {
+          "name": "total_cost_microdollars",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Grand total cost in microdollars for the queried period.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..999999999999",
+              "error_message": "Total cost must be non-negative"
+            }
+          ]
+        },
+        {
+          "name": "total_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Grand total tokens for the queried period.",
+          "validators": []
+        },
+        {
+          "name": "alerts",
+          "type_ref": "BudgetAlertList",
+          "required": true,
+          "default": "",
+          "description": "Active budget alerts for display in the cost dashboard.",
+          "validators": []
+        },
+        {
+          "name": "period_start",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 start of the queried period.",
+          "validators": []
+        },
+        {
+          "name": "period_end",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 end of the queried period.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Aggregated cost dashboard API response. All sections independently nullable to allow partial data rendering."
+    },
+    {
+      "name": "BurnRate",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "rate_microdollars_per_hour",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Current burn rate in microdollars per hour.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..999999999999",
+              "error_message": "Burn rate must be non-negative"
+            }
+          ]
+        },
+        {
+          "name": "window_hours",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Time window (in hours) over which the rate was calculated.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..720",
+              "error_message": "Window must be between 1 and 720 hours (30 days)"
+            }
+          ]
+        },
+        {
+          "name": "trend",
+          "type_ref": "BurnRateTrend",
+          "required": true,
+          "default": "",
+          "description": "Direction of burn rate compared to previous window.",
+          "validators": []
+        },
+        {
+          "name": "trend_percentage",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Percentage change vs previous window. Positive = increase, negative = decrease.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Cost burn rate calculation for the dashboard overview."
+    },
+    {
+      "name": "BurnRateTrend",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "increasing",
+        "decreasing",
+        "stable"
+      ],
+      "inner_types": [],
+      "description": "Burn rate trend direction."
+    },
+    {
+      "name": "AgentStatusSummary",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "total",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total number of configured agents.",
+          "validators": []
+        },
+        {
+          "name": "active",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of agents currently active/running.",
+          "validators": []
+        },
+        {
+          "name": "idle",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of idle agents.",
+          "validators": []
+        },
+        {
+          "name": "errored",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of agents in error state.",
+          "validators": []
+        },
+        {
+          "name": "stopped",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of stopped agents.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Agent count and status summary for the overview dashboard."
+    },
+    {
+      "name": "PactHealthSnapshot",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "is_healthy",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether PACT system is responding normally.",
+          "validators": []
+        },
+        {
+          "name": "pending_approvals",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of pending PACT approval requests.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..999999",
+              "error_message": "Pending approvals must be non-negative"
+            }
+          ]
+        },
+        {
+          "name": "approved_last_24h",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of PACT requests approved in last 24 hours.",
+          "validators": []
+        },
+        {
+          "name": "rejected_last_24h",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of PACT requests rejected in last 24 hours.",
+          "validators": []
+        },
+        {
+          "name": "timed_out_last_24h",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of PACT requests that timed out in last 24 hours.",
+          "validators": []
+        },
+        {
+          "name": "last_check_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp of the last PACT health check.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "PACT system health snapshot for the overview dashboard."
+    },
+    {
+      "name": "DashboardOverviewResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent_summary",
+          "type_ref": "DataResult",
+          "required": true,
+          "default": "",
+          "description": "DataResult wrapping AgentStatusSummary.",
+          "validators": []
+        },
+        {
+          "name": "active_projects_count",
+          "type_ref": "DataResult",
+          "required": true,
+          "default": "",
+          "description": "DataResult wrapping int — count of active projects.",
+          "validators": []
+        },
+        {
+          "name": "pact_health",
+          "type_ref": "DataResult",
+          "required": true,
+          "default": "",
+          "description": "DataResult wrapping PactHealthSnapshot.",
+          "validators": []
+        },
+        {
+          "name": "recent_activity",
+          "type_ref": "DataResult",
+          "required": true,
+          "default": "",
+          "description": "DataResult wrapping ActivityEventList — last 10 events.",
+          "validators": []
+        },
+        {
+          "name": "burn_rate",
+          "type_ref": "DataResult",
+          "required": true,
+          "default": "",
+          "description": "DataResult wrapping BurnRate.",
+          "validators": []
+        },
+        {
+          "name": "generated_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp when this overview was generated.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Composite dashboard overview API response. Each section is independently wrapped in DataResult so the UI can render available sections while showing 'no data' placeholders for missing ones."
+    },
+    {
+      "name": "SSEFilterParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent_ids",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Comma-separated agent IDs to filter on.",
+          "validators": []
+        },
+        {
+          "name": "project_ids",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Comma-separated project IDs to filter on.",
+          "validators": []
+        },
+        {
+          "name": "event_types",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Comma-separated event types to filter on.",
+          "validators": []
+        },
+        {
+          "name": "last_event_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Last received event ID for reconnection. Server replays missed events since this ID.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Query parameters for subscribing to the multiplexed SSE endpoint at /api/events. All filters are optional; omitted = no filter on that dimension."
+    },
+    {
+      "name": "SSEMessage",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Event ID for lastEventId tracking. Same as ActivityEvent.id for activity events.",
+          "validators": []
+        },
+        {
+          "name": "event",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "SSE event type field. Uses the ActivityEventType dot-notation or 'heartbeat' for keepalive.",
+          "validators": []
+        },
+        {
+          "name": "data",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "JSON-serialized event payload. Parsed by client via Zod schema.",
+          "validators": []
+        },
+        {
+          "name": "retry",
+          "type_ref": "int",
+          "required": false,
+          "default": "",
+          "description": "Suggested reconnection delay in milliseconds. Only sent on initial connection.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single SSE message sent to the client. Conforms to the SSE protocol with id, event, and data fields."
+    },
+    {
+      "name": "CostRecordList",
+      "kind": "list",
+      "fields": [],
+      "item_type": "CostRecord",
+      "variants": [],
+      "inner_types": [],
+      "description": "List of cost records."
+    },
+    {
+      "name": "CostQueryParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by project ID.",
+          "validators": []
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter by agent ID.",
+          "validators": []
+        },
+        {
+          "name": "period_start",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ISO 8601 start of query period.",
+          "validators": []
+        },
+        {
+          "name": "period_end",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ISO 8601 end of query period.",
+          "validators": []
+        },
+        {
+          "name": "granularity",
+          "type_ref": "TimeBucketGranularity",
+          "required": false,
+          "default": "day",
+          "description": "Time bucket granularity for time series data.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Query parameters for cost data retrieval."
+    }
+  ],
+  "functions": [
+    {
+      "name": "listActivityEvents",
+      "description": "Retrieves a cursor-paginated list of activity events from the filesystem event logs, filtered by the provided criteria. Events are read from OpenClaw/PACT event log files via the data access layer. Returns DataResult wrapping ActivityFeedResponse.",
+      "inputs": [
+        {
+          "name": "filter",
+          "type_ref": "ActivityFilter",
+          "required": false,
+          "default": "",
+          "description": "Filter criteria for events. Omit for unfiltered.",
+          "validators": []
+        },
+        {
+          "name": "pagination",
+          "type_ref": "CursorPagination",
+          "required": false,
+          "default": "",
+          "description": "Cursor-based pagination parameters. Defaults to first 50 events.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "INVALID_CURSOR",
+          "condition": "Provided cursor ID does not exist in event logs",
+          "error_type": "ValidationError",
+          "error_data": {
+            "cursor": "The invalid cursor value"
+          }
+        },
+        {
+          "name": "EVENT_LOG_READ_FAILED",
+          "condition": "Filesystem event log files exist but could not be read",
+          "error_type": "FileSystemError",
+          "error_data": {
+            "path": "Path that failed to read"
+          }
+        },
+        {
+          "name": "EVENT_LOG_PARSE_FAILED",
+          "condition": "Event log file contents failed Zod schema validation",
+          "error_type": "ParseError",
+          "error_data": {
+            "path": "Path of malformed file",
+            "details": "Zod error message"
+          }
+        },
+        {
+          "name": "INVALID_FILTER",
+          "condition": "Filter parameters fail Zod validation",
+          "error_type": "ValidationError",
+          "error_data": {
+            "field": "The invalid field name",
+            "message": "Validation error message"
+          }
+        }
+      ],
+      "preconditions": [
+        "If pagination.cursor is provided, it must be a valid event ID that exists in the event log",
+        "If filter.since is provided, it must be a valid ISO 8601 timestamp",
+        "If filter.until is provided, it must be a valid ISO 8601 timestamp and >= filter.since"
+      ],
+      "postconditions": [
+        "On status='ok', data contains ActivityFeedResponse with events.length <= pagination.limit",
+        "Events are ordered by timestamp descending (most recent first)",
+        "On status='ok', if has_more is true then next_cursor is a non-empty string",
+        "On status='empty', no event log files were found on the filesystem",
+        "All returned events match the provided filter criteria"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw/PACT event log directory",
+          "description": "Reads event log files from filesystem via data access layer"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n is total events scanned for filtering, O(1) with cursor index"
+      }
+    },
+    {
+      "name": "getActivityEventById",
+      "description": "Retrieves a single activity event by its unique ID.",
+      "inputs": [
+        {
+          "name": "event_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID v4 event ID to retrieve.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "error_message": "Event ID must be a valid UUID v4"
+            }
+          ]
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "INVALID_EVENT_ID",
+          "condition": "event_id is not a valid UUID v4",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "EVENT_LOG_READ_FAILED",
+          "condition": "Filesystem event log files could not be read",
+          "error_type": "FileSystemError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "event_id is a valid UUID v4 string"
+      ],
+      "postconditions": [
+        "On status='ok', data contains a single ActivityEvent with matching id",
+        "On status='empty', no event with that ID exists"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw/PACT event log directory",
+          "description": "Reads event log files to find the specific event"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "aggregateCostData",
+      "description": "Aggregates cost data from filesystem cost log files into the CostDashboardResponse structure. Produces per-project breakdowns, per-agent breakdowns, and time-bucketed series. Returns DataResult wrapping CostDashboardResponse. Gracefully returns 'empty' status when no cost files are found (AC8).",
+      "inputs": [
+        {
+          "name": "params",
+          "type_ref": "CostQueryParams",
+          "required": false,
+          "default": "",
+          "description": "Query parameters for filtering and time bucketing. Omit for all data with daily granularity.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "COST_LOG_READ_FAILED",
+          "condition": "Cost log files exist but could not be read from filesystem",
+          "error_type": "FileSystemError",
+          "error_data": {
+            "path": "Path that failed"
+          }
+        },
+        {
+          "name": "COST_LOG_PARSE_FAILED",
+          "condition": "Cost log file contents failed Zod schema validation",
+          "error_type": "ParseError",
+          "error_data": {
+            "path": "Path of malformed file",
+            "details": "Zod error message"
+          }
+        },
+        {
+          "name": "INVALID_QUERY_PARAMS",
+          "condition": "Query parameters fail Zod validation",
+          "error_type": "ValidationError",
+          "error_data": {
+            "field": "Invalid field",
+            "message": "Error message"
+          }
+        }
+      ],
+      "preconditions": [
+        "If params.period_start is provided, it must be a valid ISO 8601 timestamp",
+        "If params.period_end is provided, it must be >= params.period_start"
+      ],
+      "postconditions": [
+        "On status='ok', data contains CostDashboardResponse with all sections populated",
+        "On status='ok', total_cost_microdollars equals sum of all by_project entries",
+        "On status='ok', time_series data points are ordered chronologically",
+        "On status='empty', no cost log files were found on the filesystem — UI should show 'no data available' placeholder (AC8)",
+        "Each CostBreakdownEntry.total_cost_microdollars is the sum of its constituent CostRecords",
+        "Monetary values are always integer microdollars, never floating-point"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw cost log directory",
+          "description": "Reads cost/token log files from filesystem via data access layer"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 500,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n is total cost records in the queried period"
+      }
+    },
+    {
+      "name": "listCostRecords",
+      "description": "Lists raw cost records from filesystem, filtered by project/agent/time. Lower-level than aggregateCostData — used for detailed drill-down views.",
+      "inputs": [
+        {
+          "name": "params",
+          "type_ref": "CostQueryParams",
+          "required": false,
+          "default": "",
+          "description": "Query parameters for filtering.",
+          "validators": []
+        },
+        {
+          "name": "pagination",
+          "type_ref": "CursorPagination",
+          "required": false,
+          "default": "",
+          "description": "Cursor-based pagination. Defaults to first 50 records.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "COST_LOG_READ_FAILED",
+          "condition": "Cost log files could not be read",
+          "error_type": "FileSystemError",
+          "error_data": {}
+        },
+        {
+          "name": "COST_LOG_PARSE_FAILED",
+          "condition": "Cost log contents malformed",
+          "error_type": "ParseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On status='ok', data contains list of CostRecord ordered by timestamp descending",
+        "On status='empty', no cost records match the filter criteria or no cost files found",
+        "All returned records match the provided filter criteria"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw cost log directory",
+          "description": "Reads cost log files from filesystem"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 300,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "aggregateTokenUsage",
+      "description": "Aggregates token usage data into time-bucketed series for charting. Returns DataResult wrapping TokenUsageList.",
+      "inputs": [
+        {
+          "name": "params",
+          "type_ref": "CostQueryParams",
+          "required": true,
+          "default": "",
+          "description": "Query parameters including granularity and time range.",
+          "validators": []
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "COST_LOG_READ_FAILED",
+          "condition": "Cost log files could not be read",
+          "error_type": "FileSystemError",
+          "error_data": {}
+        },
+        {
+          "name": "COST_LOG_PARSE_FAILED",
+          "condition": "Cost log contents malformed",
+          "error_type": "ParseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "params.granularity is a valid TimeBucketGranularity value"
+      ],
+      "postconditions": [
+        "On status='ok', data contains TokenUsageList ordered chronologically",
+        "Each TokenUsage.total_tokens equals input_tokens + output_tokens",
+        "On status='empty', no token data found for the queried period"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw cost log directory",
+          "description": "Reads cost/token log files from filesystem"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 400,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n is total cost records in the queried period"
+      }
+    },
+    {
+      "name": "getBurnRate",
+      "description": "Calculates the current cost burn rate over a configurable time window. Used in the overview dashboard for the burn rate card.",
+      "inputs": [
+        {
+          "name": "window_hours",
+          "type_ref": "int",
+          "required": true,
+          "default": "24",
+          "description": "Time window in hours over which to calculate burn rate.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..720",
+              "error_message": "Window must be between 1 and 720 hours"
+            }
+          ]
+        }
+      ],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "COST_LOG_READ_FAILED",
+          "condition": "Cost log files could not be read",
+          "error_type": "FileSystemError",
+          "error_data": {}
+        },
+        {
+          "name": "INSUFFICIENT_DATA",
+          "condition": "Some cost data exists but not enough for trend calculation",
+          "error_type": "DataError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "window_hours is between 1 and 720"
+      ],
+      "postconditions": [
+        "On status='ok', data contains BurnRate with rate calculated over the specified window",
+        "On status='ok', trend is calculated by comparing current window to the immediately preceding window of equal length",
+        "On status='empty', no cost data exists for the specified window"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw cost log directory",
+          "description": "Reads recent cost data for burn rate calculation"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "createBudgetAlert",
+      "description": "Creates a new budget alert configuration in SQLite. Validates input via Zod schema. Returns the created alert.",
+      "inputs": [
+        {
+          "name": "input",
+          "type_ref": "BudgetAlertCreateInput",
+          "required": true,
+          "default": "",
+          "description": "Alert creation parameters.",
+          "validators": []
+        }
+      ],
+      "output_type": "BudgetAlertCrudResponse",
+      "error_cases": [
+        {
+          "name": "VALIDATION_FAILED",
+          "condition": "Input fails Zod schema validation",
+          "error_type": "ValidationError",
+          "error_data": {
+            "field": "Invalid field",
+            "message": "Validation error"
+          }
+        },
+        {
+          "name": "SCOPE_ID_REQUIRED",
+          "condition": "scope_type is 'project' or 'agent' but scope_id is empty",
+          "error_type": "ValidationError",
+          "error_data": {
+            "field": "scope_id",
+            "message": "scope_id required for non-global scope"
+          }
+        },
+        {
+          "name": "SCOPE_ENTITY_NOT_FOUND",
+          "condition": "scope_id references a project or agent that doesn't exist",
+          "error_type": "NotFoundError",
+          "error_data": {
+            "entity_type": "project or agent",
+            "entity_id": "The invalid ID"
+          }
+        },
+        {
+          "name": "DB_WRITE_FAILED",
+          "condition": "SQLite insert failed",
+          "error_type": "DatabaseError",
+          "error_data": {
+            "details": "SQLite error message"
+          }
+        }
+      ],
+      "preconditions": [
+        "input passes Zod schema validation",
+        "If scope_type is 'project' or 'agent', scope_id must be non-empty",
+        "If scope_type is 'global', scope_id must be empty"
+      ],
+      "postconditions": [
+        "On success=true, alert is persisted in SQLite with a generated UUID v4 id",
+        "On success=true, alert.created_at and alert.updated_at are set to current ISO 8601 timestamp",
+        "On success=true, alert.last_triggered_at is empty string (never triggered)",
+        "On success=true, response.alert contains the complete persisted alert"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite budget_alerts table",
+          "description": "Inserts a new budget alert row"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "updateBudgetAlert",
+      "description": "Updates an existing budget alert configuration in SQLite. Partial update — only provided fields are modified.",
+      "inputs": [
+        {
+          "name": "alert_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID of the alert to update.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "error_message": "Alert ID must be a valid UUID v4"
+            }
+          ]
+        },
+        {
+          "name": "input",
+          "type_ref": "BudgetAlertUpdateInput",
+          "required": true,
+          "default": "",
+          "description": "Fields to update. Only non-null fields are applied.",
+          "validators": []
+        }
+      ],
+      "output_type": "BudgetAlertCrudResponse",
+      "error_cases": [
+        {
+          "name": "ALERT_NOT_FOUND",
+          "condition": "No alert exists with the given alert_id",
+          "error_type": "NotFoundError",
+          "error_data": {
+            "alert_id": "The missing alert ID"
+          }
+        },
+        {
+          "name": "VALIDATION_FAILED",
+          "condition": "Update input fails Zod schema validation",
+          "error_type": "ValidationError",
+          "error_data": {
+            "field": "Invalid field",
+            "message": "Validation error"
+          }
+        },
+        {
+          "name": "EMPTY_UPDATE",
+          "condition": "No fields provided in the update input",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "At least one field must be provided for update"
+          }
+        },
+        {
+          "name": "DB_WRITE_FAILED",
+          "condition": "SQLite update failed",
+          "error_type": "DatabaseError",
+          "error_data": {
+            "details": "SQLite error message"
+          }
+        }
+      ],
+      "preconditions": [
+        "alert_id is a valid UUID v4",
+        "At least one field in input is provided (non-empty update)"
+      ],
+      "postconditions": [
+        "On success=true, alert.updated_at is set to current ISO 8601 timestamp",
+        "On success=true, only the provided fields are modified; other fields remain unchanged",
+        "On success=true, response.alert contains the complete updated alert",
+        "If enabled is changed from false to true, last_triggered_at is reset to empty"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite budget_alerts table",
+          "description": "Updates an existing budget alert row"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "deleteBudgetAlert",
+      "description": "Deletes a budget alert configuration from SQLite by ID.",
+      "inputs": [
+        {
+          "name": "alert_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID of the alert to delete.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "error_message": "Alert ID must be a valid UUID v4"
+            }
+          ]
+        }
+      ],
+      "output_type": "BudgetAlertCrudResponse",
+      "error_cases": [
+        {
+          "name": "ALERT_NOT_FOUND",
+          "condition": "No alert exists with the given alert_id",
+          "error_type": "NotFoundError",
+          "error_data": {
+            "alert_id": "The missing alert ID"
+          }
+        },
+        {
+          "name": "DB_WRITE_FAILED",
+          "condition": "SQLite delete failed",
+          "error_type": "DatabaseError",
+          "error_data": {
+            "details": "SQLite error message"
+          }
+        }
+      ],
+      "preconditions": [
+        "alert_id is a valid UUID v4"
+      ],
+      "postconditions": [
+        "On success=true, the alert is removed from SQLite",
+        "On success=true, response.deleted_id equals the input alert_id",
+        "Subsequent getBudgetAlert(alert_id) returns not found"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SQLite budget_alerts table",
+          "description": "Deletes a budget alert row"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "getBudgetAlert",
+      "description": "Retrieves a single budget alert configuration by ID from SQLite.",
+      "inputs": [
+        {
+          "name": "alert_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "UUID of the alert to retrieve.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "error_message": "Alert ID must be a valid UUID v4"
+            }
+          ]
+        }
+      ],
+      "output_type": "BudgetAlertCrudResponse",
+      "error_cases": [
+        {
+          "name": "ALERT_NOT_FOUND",
+          "condition": "No alert exists with the given alert_id",
+          "error_type": "NotFoundError",
+          "error_data": {
+            "alert_id": "The missing alert ID"
+          }
+        },
+        {
+          "name": "DB_READ_FAILED",
+          "condition": "SQLite query failed",
+          "error_type": "DatabaseError",
+          "error_data": {
+            "details": "SQLite error message"
+          }
+        }
+      ],
+      "preconditions": [
+        "alert_id is a valid UUID v4"
+      ],
+      "postconditions": [
+        "On success=true, response.alert contains the full BudgetAlert with matching ID",
+        "On success=false with ALERT_NOT_FOUND, no alert exists with that ID"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite budget_alerts table",
+          "description": "Reads a budget alert row from SQLite database file"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "listBudgetAlerts",
+      "description": "Lists all budget alert configurations from SQLite. Optionally filtered by scope.",
+      "inputs": [
+        {
+          "name": "scope_type",
+          "type_ref": "BudgetAlertScopeType",
+          "required": false,
+          "default": "",
+          "description": "Filter alerts by scope type. Omit for all alerts.",
+          "validators": []
+        },
+        {
+          "name": "scope_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Filter alerts by scope entity ID. Requires scope_type.",
+          "validators": []
+        },
+        {
+          "name": "enabled_only",
+          "type_ref": "bool",
+          "required": false,
+          "default": "false",
+          "description": "If true, only return enabled alerts.",
+          "validators": []
+        }
+      ],
+      "output_type": "BudgetAlertCrudResponse",
+      "error_cases": [
+        {
+          "name": "INVALID_FILTER",
+          "condition": "scope_id provided without scope_type",
+          "error_type": "ValidationError",
+          "error_data": {
+            "message": "scope_type required when scope_id is provided"
+          }
+        },
+        {
+          "name": "DB_READ_FAILED",
+          "condition": "SQLite query failed",
+          "error_type": "DatabaseError",
+          "error_data": {
+            "details": "SQLite error message"
+          }
+        }
+      ],
+      "preconditions": [
+        "If scope_id is provided, scope_type must also be provided"
+      ],
+      "postconditions": [
+        "On success=true, response.alerts contains all matching BudgetAlerts ordered by created_at descending",
+        "If no alerts match, response.alerts is an empty list (still success=true)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "SQLite budget_alerts table",
+          "description": "Reads budget alert rows from SQLite database file"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "evaluateBudgetAlerts",
+      "description": "Evaluates all enabled budget alerts against current cost data. For each alert whose threshold is crossed, updates last_triggered_at and emits a 'cost.threshold_crossed' SSE event. Called periodically by the data layer (e.g., on new cost data detection).",
+      "inputs": [],
+      "output_type": "BudgetAlertList",
+      "error_cases": [
+        {
+          "name": "DB_READ_FAILED",
+          "condition": "Failed to read alerts from SQLite",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        },
+        {
+          "name": "DB_WRITE_FAILED",
+          "condition": "Failed to update last_triggered_at in SQLite",
+          "error_type": "DatabaseError",
+          "error_data": {}
+        },
+        {
+          "name": "COST_DATA_UNAVAILABLE",
+          "condition": "Cost data files could not be read for threshold evaluation",
+          "error_type": "FileSystemError",
+          "error_data": {}
+        },
+        {
+          "name": "SSE_EMIT_FAILED",
+          "condition": "Failed to emit SSE event for triggered alert",
+          "error_type": "SSEError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "SQLite database is accessible",
+        "Cost data files are accessible on filesystem"
+      ],
+      "postconditions": [
+        "Returns list of BudgetAlerts that were triggered in this evaluation",
+        "Each triggered alert has last_triggered_at updated to current ISO 8601 timestamp in SQLite",
+        "A 'cost.threshold_crossed' SSE event is emitted for each newly triggered alert",
+        "Alerts that were already triggered within their debounce window are not re-triggered",
+        "Alerts with enabled=false are skipped"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw cost log directory",
+          "description": "Reads cost data for threshold evaluation"
+        },
+        {
+          "kind": "reads_file",
+          "target": "SQLite budget_alerts table",
+          "description": "Reads enabled budget alerts"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite budget_alerts table",
+          "description": "Updates last_triggered_at on triggered alerts"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SSE event bus",
+          "description": "Emits cost.threshold_crossed events via SSE"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1000,
+        "max_memory_mb": null,
+        "complexity": "O(a * n) where a is number of enabled alerts and n is cost records in the alert's period"
+      }
+    },
+    {
+      "name": "getDashboardOverview",
+      "description": "Assembles the composite dashboard overview by aggregating data from multiple sources: agent status from OpenClaw filesystem, active project count, PACT health from PACT CLI, last 10 activity events, and cost burn rate. Each section is independently fetched and wrapped in DataResult so partial failures don't block the entire dashboard.",
+      "inputs": [],
+      "output_type": "DashboardOverviewResponse",
+      "error_cases": [
+        {
+          "name": "TOTAL_FAILURE",
+          "condition": "All data sources are simultaneously unavailable",
+          "error_type": "ServiceUnavailableError",
+          "error_data": {
+            "message": "All dashboard data sources are unavailable"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "generated_at is set to current ISO 8601 timestamp",
+        "Each section (agent_summary, active_projects_count, pact_health, recent_activity, burn_rate) is independently a DataResult",
+        "If a section's data source is unavailable, that section returns DataResultEmpty or DataResultError while other sections still return normally",
+        "recent_activity contains at most 10 events on status='ok'",
+        "All monetary values in burn_rate are integer microdollars"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw agent configuration/session directory",
+          "description": "Reads agent status data"
+        },
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw project directory",
+          "description": "Reads project data for active count"
+        },
+        {
+          "kind": "reads_file",
+          "target": "PACT state directory",
+          "description": "Reads PACT health/approval data"
+        },
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw/PACT event log directory",
+          "description": "Reads recent activity events"
+        },
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw cost log directory",
+          "description": "Reads cost data for burn rate"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 800,
+        "max_memory_mb": null,
+        "complexity": "O(1) for each section (bounded reads)"
+      }
+    },
+    {
+      "name": "getAgentStatusSummary",
+      "description": "Reads agent configuration and session data from OpenClaw filesystem and produces an AgentStatusSummary. Used by getDashboardOverview and potentially standalone.",
+      "inputs": [],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "AGENT_CONFIG_READ_FAILED",
+          "condition": "Agent configuration directory could not be read",
+          "error_type": "FileSystemError",
+          "error_data": {}
+        },
+        {
+          "name": "AGENT_SESSION_PARSE_FAILED",
+          "condition": "Agent session files are malformed",
+          "error_type": "ParseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On status='ok', data contains AgentStatusSummary where total = active + idle + errored + stopped",
+        "On status='empty', no agent configuration files found"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw agent configuration/session directory",
+          "description": "Reads agent config and session state files"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "getPactHealthSnapshot",
+      "description": "Reads PACT state data from the filesystem and optionally calls the PACT CLI to produce a PactHealthSnapshot.",
+      "inputs": [],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "PACT_STATE_READ_FAILED",
+          "condition": "PACT state directory could not be read",
+          "error_type": "FileSystemError",
+          "error_data": {}
+        },
+        {
+          "name": "PACT_CLI_FAILED",
+          "condition": "PACT CLI invocation failed or timed out",
+          "error_type": "CLIError",
+          "error_data": {
+            "exit_code": "CLI exit code",
+            "stderr": "CLI error output"
+          }
+        },
+        {
+          "name": "PACT_STATE_PARSE_FAILED",
+          "condition": "PACT state files are malformed",
+          "error_type": "ParseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On status='ok', data contains PactHealthSnapshot with last_check_at set to current timestamp",
+        "On status='empty', PACT state directory does not exist or is empty",
+        "Approval/rejection/timeout counts cover the last 24 hours"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "PACT state directory",
+          "description": "Reads PACT state files from filesystem"
+        },
+        {
+          "kind": "network_call",
+          "target": "PACT CLI",
+          "description": "Optionally invokes PACT CLI for health check"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 500,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "subscribeToEvents",
+      "description": "Establishes a Server-Sent Events (SSE) connection at /api/events. Multiplexes all event types through a single endpoint. Supports filter query params and reconnection via lastEventId. The SSE stream sends heartbeat events every 30 seconds to keep the connection alive.",
+      "inputs": [
+        {
+          "name": "filters",
+          "type_ref": "SSEFilterParams",
+          "required": false,
+          "default": "",
+          "description": "Optional filter parameters from query string.",
+          "validators": []
+        }
+      ],
+      "output_type": "SSEMessage",
+      "error_cases": [
+        {
+          "name": "INVALID_FILTER_PARAMS",
+          "condition": "Filter query params fail Zod validation",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "EVENT_REPLAY_FAILED",
+          "condition": "Could not replay events from last_event_id (too old or invalid)",
+          "error_type": "ReplayError",
+          "error_data": {
+            "last_event_id": "The requested event ID",
+            "reason": "Why replay failed"
+          }
+        },
+        {
+          "name": "STREAM_ERROR",
+          "condition": "SSE event bus encounters an internal error",
+          "error_type": "SSEError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "If last_event_id is provided, it should be a valid event ID for replay",
+        "Client supports SSE (EventSource API or compatible)"
+      ],
+      "postconditions": [
+        "Returns a streaming SSE response with Content-Type: text/event-stream",
+        "Each SSE message includes id, event, and data fields",
+        "Heartbeat events are sent every 30 seconds with event='heartbeat'",
+        "If last_event_id is provided, missed events since that ID are replayed before live streaming",
+        "Only events matching the provided filters are sent to this client",
+        "Initial message includes retry field suggesting 3000ms reconnection delay"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw/PACT event log directory",
+          "description": "Reads event logs for replay on reconnection"
+        },
+        {
+          "kind": "network_call",
+          "target": "SSE event bus",
+          "description": "Subscribes to the internal SSE event bus for live events"
+        },
+        {
+          "kind": "logging",
+          "target": "SSE connection log",
+          "description": "Logs SSE connection/disconnection for monitoring"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": "O(m) for initial replay where m is missed events; O(1) per live event"
+      }
+    },
+    {
+      "name": "transformCostRecordsToChartData",
+      "description": "Pure transformation function in lib/data/transforms.ts. Converts a list of CostRecords into CostChartDataPointList shaped for recharts consumption. Groups by the specified dimension (project, agent, or time bucket).",
+      "inputs": [
+        {
+          "name": "records",
+          "type_ref": "CostRecordList",
+          "required": true,
+          "default": "",
+          "description": "Raw cost records to transform.",
+          "validators": []
+        },
+        {
+          "name": "group_by",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Grouping dimension: 'project', 'agent', or 'time'.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "group_by === 'project' || group_by === 'agent' || group_by === 'time'",
+              "error_message": "group_by must be 'project', 'agent', or 'time'"
+            }
+          ]
+        },
+        {
+          "name": "granularity",
+          "type_ref": "TimeBucketGranularity",
+          "required": false,
+          "default": "day",
+          "description": "Time bucket granularity. Only used when group_by='time'.",
+          "validators": []
+        }
+      ],
+      "output_type": "CostChartDataPointList",
+      "error_cases": [],
+      "preconditions": [
+        "records is a valid CostRecordList (may be empty)",
+        "group_by is one of 'project', 'agent', 'time'"
+      ],
+      "postconditions": [
+        "Output length equals number of unique groups in the input",
+        "Each data point's cost_dollars equals cost_microdollars / 1_000_000",
+        "If records is empty, returns empty list",
+        "When group_by='time', data points are ordered chronologically",
+        "When group_by='project' or 'agent', data points are ordered by cost descending"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": "Pure transformation function with no side effects"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "transformTokenUsageToChartData",
+      "description": "Pure transformation function in lib/data/transforms.ts. Converts TokenUsageList into TokenChartDataPointList shaped for recharts line chart consumption.",
+      "inputs": [
+        {
+          "name": "usage_data",
+          "type_ref": "TokenUsageList",
+          "required": true,
+          "default": "",
+          "description": "Time-bucketed token usage data to transform.",
+          "validators": []
+        }
+      ],
+      "output_type": "TokenChartDataPointList",
+      "error_cases": [],
+      "preconditions": [
+        "usage_data is a valid TokenUsageList (may be empty)"
+      ],
+      "postconditions": [
+        "Output has same length as input",
+        "Each data point's total_tokens equals input_tokens + output_tokens",
+        "Data points are in the same chronological order as the input",
+        "If usage_data is empty, returns empty list",
+        "Labels are human-readable time strings derived from period_start"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": "Pure transformation function with no side effects"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "getActiveProjectsCount",
+      "description": "Reads OpenClaw project configuration from the filesystem and returns the count of active (non-archived) projects.",
+      "inputs": [],
+      "output_type": "DataResult",
+      "error_cases": [
+        {
+          "name": "PROJECT_CONFIG_READ_FAILED",
+          "condition": "Project configuration directory could not be read",
+          "error_type": "FileSystemError",
+          "error_data": {}
+        },
+        {
+          "name": "PROJECT_CONFIG_PARSE_FAILED",
+          "condition": "Project configuration files are malformed",
+          "error_type": "ParseError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "On status='ok', data contains an integer >= 0 representing active project count",
+        "On status='empty', no project configuration files found",
+        "Archived projects are excluded from the count"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw project configuration directory",
+          "description": "Reads project config files to count active projects"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 150,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    }
+  ],
+  "dependencies": [],
+  "dependency_contracts": {},
+  "invariants": [
+    "All monetary values are stored and transmitted as integer microdollars (1 USD = 1,000,000 microdollars); conversion to display dollars happens only in UI presentation layer or in chart transform functions",
+    "All timestamps are ISO 8601 strings with timezone information",
+    "All data access functions return DataResult — components never access filesystem or SQLite directly",
+    "Components never import from OpenClaw or PACT libraries directly; all integration is via filesystem reads and CLI invocations through the data access layer",
+    "ActivityEvent IDs are UUID v4 and globally unique; used for SSE deduplication via lastEventId",
+    "The SSE endpoint at /api/events is the single multiplexed stream for all event types; no per-type SSE endpoints",
+    "Budget alerts are persisted exclusively in SQLite (dashboard-specific data); agent/project/cost data is read from filesystem (OpenClaw/PACT data)",
+    "Zod schemas are the single source of truth for all type definitions; TypeScript types are inferred via z.infer<typeof schema>",
+    "All external input (API params, file contents, CLI output) is validated through Zod schemas before use",
+    "DataResult with status='empty' triggers 'no data available' placeholder UI (AC8); it is not treated as an error",
+    "SSE heartbeat events are emitted every 30 seconds to keep connections alive",
+    "BudgetAlert evaluation includes debounce logic: an alert is not re-triggered if last_triggered_at is within the same evaluation period",
+    "DashboardOverviewResponse sections fail independently: one section's error does not prevent other sections from rendering",
+    "Files in this component respect the 250-line limit; types are split across lib/types/activity.ts, cost.ts, budget.ts, dashboard.ts, common.ts, sse.ts with a barrel index.ts"
+  ],
+  "requires": [
+    "lib/db — SQLite connection via better-sqlite3 for budget alerts and dashboard preferences",
+    "lib/sse — SSE event bus for multiplexed event streaming",
+    "lib/data — Data access layer (filesystem + SQLite) for all reads",
+    "lib/pact — PACT CLI wrapper + file parser for health snapshots",
+    "lib/openclaw — OpenClaw config/session reader for agent and project data"
+  ],
+  "processing_register": "pragmatic-implementation"
+}

@@ -1,0 +1,2691 @@
+{
+  "component_id": "e2e_tests",
+  "name": "End-to-End & Integration Tests",
+  "description": "Playwright e2e test suite and API integration tests for OpenClaw Mission Control. Covers: login flow, overview page load (<2s), agent list rendering, project CRUD flow, task board interactions (create, move, assign), PACT pipeline view for fixture projects, activity feed SSE updates, and cost page rendering. All tests run against fixture data (mock openclaw.json, mock PACT directories, seeded SQLite) — no running OpenClaw instance or PACT daemon required. Targets Chromium at minimum with Firefox and WebKit configs. Includes integration tests for all API routes with Zod schema validation of responses.",
+  "version": 1,
+  "types": [
+    {
+      "name": "BrowserProject",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "chromium",
+        "firefox",
+        "webkit"
+      ],
+      "inner_types": [],
+      "description": "Supported Playwright browser projects for cross-browser testing"
+    },
+    {
+      "name": "TestTag",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "e2e",
+        "integration",
+        "performance",
+        "sse",
+        "crud",
+        "smoke",
+        "regression"
+      ],
+      "inner_types": [],
+      "description": "Tags for categorizing and filtering test runs"
+    },
+    {
+      "name": "TestStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "passed",
+        "failed",
+        "skipped",
+        "timed_out",
+        "interrupted"
+      ],
+      "inner_types": [],
+      "description": "Possible outcomes of a test execution"
+    },
+    {
+      "name": "ErrorCode",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "NOT_FOUND",
+        "VALIDATION_ERROR",
+        "CONFLICT",
+        "INTERNAL_ERROR",
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+        "BAD_REQUEST",
+        "SERVICE_UNAVAILABLE"
+      ],
+      "inner_types": [],
+      "description": "Typed error codes returned by API routes, used for assertion in integration tests"
+    },
+    {
+      "name": "SSEEventType",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "agent_update",
+        "task_update",
+        "project_update",
+        "pact_update",
+        "activity"
+      ],
+      "inner_types": [],
+      "description": "Types of events emitted over the SSE event stream"
+    },
+    {
+      "name": "StandardApiError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "error",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error message",
+          "validators": []
+        },
+        {
+          "name": "code",
+          "type_ref": "ErrorCode",
+          "required": true,
+          "default": "",
+          "description": "Typed error code for programmatic handling",
+          "validators": []
+        },
+        {
+          "name": "details",
+          "type_ref": "any",
+          "required": false,
+          "default": "null",
+          "description": "Optional additional error context (validation errors, etc.)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Standardized API error response shape validated by integration tests"
+    },
+    {
+      "name": "StandardApiResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "data",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Response payload, validated against endpoint-specific Zod schema",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "HTTP status code",
+          "validators": []
+        },
+        {
+          "name": "ok",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether the response indicates success (2xx)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Generic wrapper for successful API responses validated in integration tests"
+    },
+    {
+      "name": "FixtureConfig",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "openclaw_config_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to mock openclaw.json fixture file",
+          "validators": []
+        },
+        {
+          "name": "pact_directory_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to mock PACT directory tree with pipeline.json and sessions",
+          "validators": []
+        },
+        {
+          "name": "db_seed_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to SQLite seed SQL file",
+          "validators": []
+        },
+        {
+          "name": "db_schema_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to SQLite schema SQL file (may import from lib/db/)",
+          "validators": []
+        },
+        {
+          "name": "temp_directory",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Temp directory for isolated fixture copies per test worker",
+          "validators": []
+        },
+        {
+          "name": "responses_snapshot_path",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional path to expected API response snapshots",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Configuration for test fixture directory layout and data sources"
+    },
+    {
+      "name": "TestEnvironment",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "base_url",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Base URL of the Next.js dev/test server",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^https?://",
+              "error_message": "base_url must be a valid HTTP(S) URL"
+            }
+          ]
+        },
+        {
+          "name": "db_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to the worker-isolated SQLite database file",
+          "validators": []
+        },
+        {
+          "name": "openclaw_config_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to the copied mock openclaw.json for this worker",
+          "validators": []
+        },
+        {
+          "name": "pact_directory_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to the copied mock PACT directory for this worker",
+          "validators": []
+        },
+        {
+          "name": "worker_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Playwright worker identifier for parallel isolation",
+          "validators": []
+        },
+        {
+          "name": "browser_project",
+          "type_ref": "BrowserProject",
+          "required": true,
+          "default": "",
+          "description": "Active browser project for this test run",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Runtime test environment configuration resolved during global setup"
+    },
+    {
+      "name": "PageObjectModel",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "page_url",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Relative URL path for this page",
+          "validators": []
+        },
+        {
+          "name": "page_title",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Expected page title or heading for load verification",
+          "validators": []
+        },
+        {
+          "name": "selectors",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Map of semantic names to CSS/test-id selectors used by this POM",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Base structure for Page Object Models. Each POM wraps a Playwright Page and exposes typed actions and assertions."
+    },
+    {
+      "name": "FixtureProject",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique project identifier",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project display name",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..256",
+              "error_message": "Project name must be 1-255 characters"
+            }
+          ]
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project description",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project status (active, archived, etc.)",
+          "validators": []
+        },
+        {
+          "name": "created_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 creation timestamp",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A project entity as seeded in fixture data"
+    },
+    {
+      "name": "FixtureTask",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique task identifier",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Parent project ID",
+          "validators": []
+        },
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task title",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": "1..512",
+              "error_message": "Task title must be 1-511 characters"
+            }
+          ]
+        },
+        {
+          "name": "status",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task board column (todo, in_progress, review, done)",
+          "validators": []
+        },
+        {
+          "name": "assigned_agent_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Agent assigned to this task, if any",
+          "validators": []
+        },
+        {
+          "name": "priority",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Task priority (1=highest, 5=lowest)",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..5",
+              "error_message": "Priority must be between 1 and 5"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A task entity as seeded in fixture data"
+    },
+    {
+      "name": "FixtureAgent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique agent identifier",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Agent display name",
+          "validators": []
+        },
+        {
+          "name": "role",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Agent role (e.g., coder, reviewer, planner)",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Agent status (active, idle, offline)",
+          "validators": []
+        },
+        {
+          "name": "model",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "LLM model identifier used by the agent",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "An agent entity as read from fixture openclaw.json"
+    },
+    {
+      "name": "FixturePactPipeline",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project this pipeline belongs to",
+          "validators": []
+        },
+        {
+          "name": "stages",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Ordered list of pipeline stages",
+          "validators": []
+        },
+        {
+          "name": "current_stage_index",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Index of the currently active stage",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "0..100",
+              "error_message": "Stage index must be non-negative"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A PACT pipeline as read from fixture PACT directory"
+    },
+    {
+      "name": "FixturePactStage",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Stage name (e.g., plan, act, check, transform)",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Stage status (pending, active, completed, failed)",
+          "validators": []
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Agent responsible for this stage",
+          "validators": []
+        },
+        {
+          "name": "artifacts",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "File paths of artifacts produced by this stage",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single stage in a PACT pipeline fixture"
+    },
+    {
+      "name": "SSETestEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "event_type",
+          "type_ref": "SSEEventType",
+          "required": true,
+          "default": "",
+          "description": "The SSE event name",
+          "validators": []
+        },
+        {
+          "name": "data",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "Parsed JSON payload of the event",
+          "validators": []
+        },
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Optional event ID for resumption",
+          "validators": []
+        },
+        {
+          "name": "timestamp_ms",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Timestamp when the event was received (epoch ms)",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A parsed SSE event for assertion in integration tests"
+    },
+    {
+      "name": "PerformanceMetrics",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "page_load_ms",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Wall-clock time from navigation start to page load complete",
+          "validators": []
+        },
+        {
+          "name": "first_contentful_paint_ms",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "First Contentful Paint timing",
+          "validators": []
+        },
+        {
+          "name": "largest_contentful_paint_ms",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Largest Contentful Paint timing",
+          "validators": []
+        },
+        {
+          "name": "dom_content_loaded_ms",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "DOMContentLoaded event timing",
+          "validators": []
+        },
+        {
+          "name": "content_visible_ms",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Time until primary content selector becomes visible",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Performance measurements captured during e2e performance tests"
+    },
+    {
+      "name": "TestResult",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "test_name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Fully qualified test name",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "TestStatus",
+          "required": true,
+          "default": "",
+          "description": "Test outcome",
+          "validators": []
+        },
+        {
+          "name": "duration_ms",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Test execution duration in milliseconds",
+          "validators": []
+        },
+        {
+          "name": "browser",
+          "type_ref": "BrowserProject",
+          "required": true,
+          "default": "",
+          "description": "Browser the test ran on",
+          "validators": []
+        },
+        {
+          "name": "tags",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Tags applied to this test",
+          "validators": []
+        },
+        {
+          "name": "error_message",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Error message if test failed",
+          "validators": []
+        },
+        {
+          "name": "screenshot_path",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Path to failure screenshot if captured",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Result of a single test case execution"
+    },
+    {
+      "name": "TestSuiteResult",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "total",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total number of tests",
+          "validators": []
+        },
+        {
+          "name": "passed",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of passed tests",
+          "validators": []
+        },
+        {
+          "name": "failed",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of failed tests",
+          "validators": []
+        },
+        {
+          "name": "skipped",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of skipped tests",
+          "validators": []
+        },
+        {
+          "name": "duration_ms",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total suite execution time",
+          "validators": []
+        },
+        {
+          "name": "results",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Individual test results",
+          "validators": []
+        },
+        {
+          "name": "browsers_tested",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Browsers that were included in this run",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Aggregate result of a full test suite run"
+    },
+    {
+      "name": "ApiClientConfig",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "base_url",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "API base URL",
+          "validators": []
+        },
+        {
+          "name": "timeout_ms",
+          "type_ref": "int",
+          "required": true,
+          "default": "10000",
+          "description": "Request timeout in milliseconds",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..60000",
+              "error_message": "Timeout must be between 1ms and 60s"
+            }
+          ]
+        },
+        {
+          "name": "headers",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Default headers to include on all requests",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Configuration for the typed HTTP client used in integration tests"
+    },
+    {
+      "name": "SSEClientConfig",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "url",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "SSE endpoint URL",
+          "validators": []
+        },
+        {
+          "name": "timeout_ms",
+          "type_ref": "int",
+          "required": true,
+          "default": "5000",
+          "description": "Connection timeout in milliseconds",
+          "validators": []
+        },
+        {
+          "name": "event_filter",
+          "type_ref": "list",
+          "required": false,
+          "default": "",
+          "description": "Optional filter to subscribe to specific event types only",
+          "validators": []
+        },
+        {
+          "name": "max_events",
+          "type_ref": "int",
+          "required": true,
+          "default": "100",
+          "description": "Maximum number of events to collect before auto-disconnect",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": "1..10000",
+              "error_message": "max_events must be between 1 and 10000"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Configuration for the SSE test client used in integration tests"
+    }
+  ],
+  "functions": [
+    {
+      "name": "globalSetup",
+      "description": "Playwright global setup function. Copies fixture files to a temp directory, creates and seeds SQLite database from schema and seed SQL, sets environment variables pointing the Next.js test server at fixture data. Runs once before all test workers.",
+      "inputs": [
+        {
+          "name": "fixture_config",
+          "type_ref": "FixtureConfig",
+          "required": true,
+          "default": "",
+          "description": "Paths to all fixture data sources",
+          "validators": []
+        }
+      ],
+      "output_type": "TestEnvironment",
+      "error_cases": [
+        {
+          "name": "fixture_not_found",
+          "condition": "Any configured fixture file or directory does not exist",
+          "error_type": "FileNotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "db_schema_error",
+          "condition": "Schema SQL is invalid or fails to execute",
+          "error_type": "DatabaseSchemaError",
+          "error_data": {}
+        },
+        {
+          "name": "db_seed_error",
+          "condition": "Seed SQL fails (constraint violation, syntax error)",
+          "error_type": "DatabaseSeedError",
+          "error_data": {}
+        },
+        {
+          "name": "temp_dir_creation_failed",
+          "condition": "Cannot create temp directory (permissions, disk space)",
+          "error_type": "FilesystemError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Fixture files exist at configured paths (openclaw.json, pact/, seed.sql, schema.sql)",
+        "Temp directory parent is writable",
+        "No prior test environment is active (clean state)"
+      ],
+      "postconditions": [
+        "Temp directory created with copies of all fixture files",
+        "SQLite database created, schema applied, and seed data inserted",
+        "Environment variables OPENCLAW_CONFIG_PATH, PACT_DIR, DATABASE_PATH are set",
+        "TestEnvironment returned with all paths resolved"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "temp directory with fixture copies",
+          "description": "Creates temp dir and copies all fixture files"
+        },
+        {
+          "kind": "writes_file",
+          "target": "SQLite database file",
+          "description": "Creates and seeds the test SQLite database"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "process.env",
+          "description": "Sets environment variables for Next.js test server"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 5000,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n = total fixture file size"
+      }
+    },
+    {
+      "name": "globalTeardown",
+      "description": "Playwright global teardown function. Removes temp directories, closes database connections, and cleans up environment variables. Runs once after all test workers complete.",
+      "inputs": [
+        {
+          "name": "environment",
+          "type_ref": "TestEnvironment",
+          "required": true,
+          "default": "",
+          "description": "The test environment created during global setup",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [
+        {
+          "name": "cleanup_failed",
+          "condition": "Cannot remove temp directory (file locked, permissions)",
+          "error_type": "FilesystemError",
+          "error_data": {
+            "note": "Should log warning but not throw — teardown must be best-effort"
+          }
+        }
+      ],
+      "preconditions": [
+        "globalSetup completed successfully and returned a valid TestEnvironment"
+      ],
+      "postconditions": [
+        "Temp directory and all contents deleted",
+        "SQLite database file removed",
+        "Environment variables unset",
+        "No orphaned file handles or processes"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "temp directory",
+          "description": "Recursively deletes temp directory and contents"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "process.env",
+          "description": "Removes test environment variables"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createWorkerDatabase",
+      "description": "Creates a per-worker copy of the seeded SQLite database to ensure parallel test isolation. Each Playwright worker gets its own database file.",
+      "inputs": [
+        {
+          "name": "source_db_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to the seed-populated SQLite database from global setup",
+          "validators": []
+        },
+        {
+          "name": "worker_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Playwright worker identifier for unique naming",
+          "validators": []
+        }
+      ],
+      "output_type": "str",
+      "error_cases": [
+        {
+          "name": "source_db_not_found",
+          "condition": "Source database file does not exist",
+          "error_type": "FileNotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "copy_failed",
+          "condition": "Failed to copy database file (disk space, permissions)",
+          "error_type": "FilesystemError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Source database file exists and is a valid SQLite database",
+        "Worker ID is non-empty and filesystem-safe"
+      ],
+      "postconditions": [
+        "New database file created at a worker-specific path",
+        "Database is a byte-for-byte copy of the source",
+        "Returned string is the absolute path to the worker database"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "worker-specific SQLite database copy",
+          "description": "Copies seeded database for parallel isolation"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "seedDatabase",
+      "description": "Applies schema and seed data to a SQLite database file. Used by global setup and can be called in individual tests for reset.",
+      "inputs": [
+        {
+          "name": "db_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to the target SQLite database file",
+          "validators": []
+        },
+        {
+          "name": "schema_sql",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "SQL string for schema creation (CREATE TABLE statements)",
+          "validators": []
+        },
+        {
+          "name": "seed_sql",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "SQL string for inserting fixture data",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [
+        {
+          "name": "schema_invalid",
+          "condition": "Schema SQL contains syntax errors or invalid statements",
+          "error_type": "DatabaseSchemaError",
+          "error_data": {}
+        },
+        {
+          "name": "seed_constraint_violation",
+          "condition": "Seed data violates schema constraints (FK, UNIQUE, NOT NULL)",
+          "error_type": "DatabaseSeedError",
+          "error_data": {}
+        },
+        {
+          "name": "db_write_failed",
+          "condition": "Cannot write to database path",
+          "error_type": "FilesystemError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "db_path parent directory exists and is writable",
+        "schema_sql contains valid SQLite DDL",
+        "seed_sql references only tables defined in schema_sql"
+      ],
+      "postconditions": [
+        "Database file created or overwritten at db_path",
+        "All schema tables exist",
+        "All seed data rows are inserted",
+        "Database is in WAL mode for concurrent read support"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "SQLite database file",
+          "description": "Creates/overwrites database with schema and seed data"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "resetDatabase",
+      "description": "Resets a worker database to its seeded state by dropping all tables and re-applying schema and seed data. Used between tests that mutate data.",
+      "inputs": [
+        {
+          "name": "db_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Path to the worker SQLite database file",
+          "validators": []
+        },
+        {
+          "name": "schema_sql",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Schema SQL to re-apply",
+          "validators": []
+        },
+        {
+          "name": "seed_sql",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Seed SQL to re-apply",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [
+        {
+          "name": "db_not_found",
+          "condition": "Database file does not exist at db_path",
+          "error_type": "FileNotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "db_locked",
+          "condition": "Database is locked by another process",
+          "error_type": "DatabaseLockError",
+          "error_data": {}
+        },
+        {
+          "name": "reset_failed",
+          "condition": "Schema or seed re-application fails",
+          "error_type": "DatabaseSchemaError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Database file exists at db_path",
+        "No active transactions or open connections from other processes"
+      ],
+      "postconditions": [
+        "All existing tables dropped",
+        "Schema and seed data re-applied cleanly",
+        "Database state identical to post-seedDatabase state"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "SQLite database file",
+          "description": "Drops and recreates all tables with seed data"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createFixtureProject",
+      "description": "Factory function to create a FixtureProject with sensible defaults. Used in test factories for generating test data.",
+      "inputs": [
+        {
+          "name": "overrides",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Partial FixtureProject fields to override defaults",
+          "validators": []
+        }
+      ],
+      "output_type": "FixtureProject",
+      "error_cases": [
+        {
+          "name": "invalid_override_field",
+          "condition": "Override contains a field name not in FixtureProject",
+          "error_type": "ValidationError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "Returned FixtureProject has all required fields populated",
+        "ID is a valid unique identifier (UUID format)",
+        "created_at is a valid ISO 8601 timestamp",
+        "Any overridden fields use the provided values"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createFixtureTask",
+      "description": "Factory function to create a FixtureTask with sensible defaults. Used in test factories for generating test data.",
+      "inputs": [
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Parent project ID this task belongs to",
+          "validators": []
+        },
+        {
+          "name": "overrides",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Partial FixtureTask fields to override defaults",
+          "validators": []
+        }
+      ],
+      "output_type": "FixtureTask",
+      "error_cases": [
+        {
+          "name": "empty_project_id",
+          "condition": "project_id is empty string",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "invalid_override_field",
+          "condition": "Override contains a field name not in FixtureTask",
+          "error_type": "ValidationError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "project_id is non-empty"
+      ],
+      "postconditions": [
+        "Returned FixtureTask has all required fields populated",
+        "project_id matches the provided value",
+        "Default status is 'todo'",
+        "Default priority is 3"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createFixtureAgent",
+      "description": "Factory function to create a FixtureAgent with sensible defaults. Used in test factories for generating test data.",
+      "inputs": [
+        {
+          "name": "overrides",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Partial FixtureAgent fields to override defaults",
+          "validators": []
+        }
+      ],
+      "output_type": "FixtureAgent",
+      "error_cases": [
+        {
+          "name": "invalid_override_field",
+          "condition": "Override contains a field name not in FixtureAgent",
+          "error_type": "ValidationError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "Returned FixtureAgent has all required fields populated",
+        "Default role is 'coder'",
+        "Default status is 'active'",
+        "Default model is 'claude-sonnet-4-20250514'"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createFixturePactPipeline",
+      "description": "Factory function to create a FixturePactPipeline with the standard PACT stages (Plan, Act, Check, Transform) and sensible defaults.",
+      "inputs": [
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project this pipeline belongs to",
+          "validators": []
+        },
+        {
+          "name": "overrides",
+          "type_ref": "dict",
+          "required": false,
+          "default": "",
+          "description": "Partial FixturePactPipeline fields to override defaults",
+          "validators": []
+        }
+      ],
+      "output_type": "FixturePactPipeline",
+      "error_cases": [
+        {
+          "name": "empty_project_id",
+          "condition": "project_id is empty string",
+          "error_type": "ValidationError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "project_id is non-empty"
+      ],
+      "postconditions": [
+        "Pipeline has at least 4 stages (plan, act, check, transform)",
+        "current_stage_index is within bounds of stages array",
+        "project_id matches the provided value"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "setupFixtureDirectories",
+      "description": "Creates the mock PACT directory tree structure in the temp directory with pipeline.json and session files for fixture projects.",
+      "inputs": [
+        {
+          "name": "temp_dir",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Root temp directory for fixture files",
+          "validators": []
+        },
+        {
+          "name": "pipelines",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of FixturePactPipeline objects to write as fixture files",
+          "validators": []
+        },
+        {
+          "name": "agents",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of FixtureAgent objects to include in mock openclaw.json",
+          "validators": []
+        }
+      ],
+      "output_type": "FixtureConfig",
+      "error_cases": [
+        {
+          "name": "temp_dir_not_found",
+          "condition": "temp_dir does not exist",
+          "error_type": "FileNotFoundError",
+          "error_data": {}
+        },
+        {
+          "name": "write_failed",
+          "condition": "Cannot write files to temp_dir (permissions, disk space)",
+          "error_type": "FilesystemError",
+          "error_data": {}
+        },
+        {
+          "name": "serialization_error",
+          "condition": "Pipeline or agent data cannot be serialized to JSON",
+          "error_type": "SerializationError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "temp_dir exists and is writable",
+        "pipelines list is non-empty",
+        "agents list is non-empty"
+      ],
+      "postconditions": [
+        "openclaw.json written at temp_dir/openclaw.json with serialized agents",
+        "PACT directories created at temp_dir/pact/<project_id>/ for each pipeline",
+        "pipeline.json written in each project directory",
+        "sessions/ subdirectory created in each project directory",
+        "Returned FixtureConfig has all paths correctly set"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "writes_file",
+          "target": "temp_dir/openclaw.json",
+          "description": "Writes mock OpenClaw config with agent definitions"
+        },
+        {
+          "kind": "writes_file",
+          "target": "temp_dir/pact/*/pipeline.json",
+          "description": "Writes PACT pipeline JSON for each fixture project"
+        },
+        {
+          "kind": "writes_file",
+          "target": "temp_dir/pact/*/sessions/",
+          "description": "Creates session directories for each fixture project"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createApiClient",
+      "description": "Creates a typed HTTP client for API integration tests. Uses native fetch. Validates responses against Zod schemas from lib/types/.",
+      "inputs": [
+        {
+          "name": "config",
+          "type_ref": "ApiClientConfig",
+          "required": true,
+          "default": "",
+          "description": "API client configuration with base URL and timeout",
+          "validators": []
+        }
+      ],
+      "output_type": "dict",
+      "error_cases": [
+        {
+          "name": "invalid_base_url",
+          "condition": "base_url is not a valid URL",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "connection_refused",
+          "condition": "Server is not running at base_url",
+          "error_type": "ConnectionError",
+          "error_data": {}
+        },
+        {
+          "name": "timeout",
+          "condition": "Request exceeds configured timeout_ms",
+          "error_type": "TimeoutError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "config.base_url is a valid HTTP(S) URL",
+        "config.timeout_ms is positive"
+      ],
+      "postconditions": [
+        "Returned dict contains methods: get, post, put, delete",
+        "Each method accepts path (str) and optional body (dict), returns StandardApiResponse",
+        "All responses are validated against StandardApiResponse or StandardApiError shape",
+        "Timeout is enforced via AbortController"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "Next.js API routes",
+          "description": "Makes HTTP requests to the test server API endpoints"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "createSSEClient",
+      "description": "Creates a fetch-based SSE client for integration testing of the /api/events endpoint. Parses event stream, type-checks payloads against SSETestEvent schema, and collects events until max_events or timeout.",
+      "inputs": [
+        {
+          "name": "config",
+          "type_ref": "SSEClientConfig",
+          "required": true,
+          "default": "",
+          "description": "SSE client configuration with URL, timeout, filters, and max events",
+          "validators": []
+        }
+      ],
+      "output_type": "dict",
+      "error_cases": [
+        {
+          "name": "connection_failed",
+          "condition": "Cannot establish SSE connection to the endpoint",
+          "error_type": "ConnectionError",
+          "error_data": {}
+        },
+        {
+          "name": "timeout",
+          "condition": "Timeout exceeded while waiting for events",
+          "error_type": "TimeoutError",
+          "error_data": {}
+        },
+        {
+          "name": "invalid_event_payload",
+          "condition": "Received event data fails Zod schema validation",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "stream_closed_unexpectedly",
+          "condition": "Server closes SSE stream before expected events received",
+          "error_type": "StreamClosedError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "config.url is a valid HTTP(S) URL pointing to the SSE endpoint",
+        "config.timeout_ms is positive"
+      ],
+      "postconditions": [
+        "Returned dict contains methods: connect, disconnect, waitForEvent, collectEvents, getReceivedEvents",
+        "connect() establishes SSE connection and begins collecting events",
+        "waitForEvent(eventType, timeout) resolves with the first matching SSETestEvent or rejects on timeout",
+        "collectEvents(count, timeout) resolves with an array of SSETestEvent when count events received or timeout",
+        "getReceivedEvents() returns all collected SSETestEvent objects",
+        "disconnect() closes the connection and stops collection"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "/api/events SSE endpoint",
+          "description": "Establishes persistent SSE connection to collect events"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "runE2EOverviewPageTest",
+      "description": "E2e test: Navigates to the overview/home page, asserts it loads within 2000ms (AC1), verifies key dashboard widgets are rendered (agent summary, project list, activity feed preview, cost summary). Tagged @performance @smoke.",
+      "inputs": [
+        {
+          "name": "environment",
+          "type_ref": "TestEnvironment",
+          "required": true,
+          "default": "",
+          "description": "Active test environment with server URL and fixture paths",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "page_load_timeout",
+          "condition": "Page does not load within 30s navigation timeout",
+          "error_type": "TimeoutError",
+          "error_data": {}
+        },
+        {
+          "name": "performance_assertion_failed",
+          "condition": "Content not visible within 2000ms",
+          "error_type": "PerformanceAssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "widget_not_rendered",
+          "condition": "One or more dashboard widgets not found in DOM",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "data_mismatch",
+          "condition": "Rendered data does not match fixture data",
+          "error_type": "AssertionError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Next.js test server is running at environment.base_url",
+        "Fixture data is loaded (agents, projects, tasks)",
+        "Browser context is initialized"
+      ],
+      "postconditions": [
+        "Overview page loaded and primary content visible within 2000ms",
+        "Agent summary widget displays correct count from fixture data",
+        "Project list shows seeded projects",
+        "Activity feed preview shows recent entries",
+        "Cost summary widget renders without error",
+        "TestResult captures PerformanceMetrics"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "Next.js test server",
+          "description": "Navigates browser to overview page and loads all resources"
+        },
+        {
+          "kind": "reads_file",
+          "target": "Browser performance API",
+          "description": "Reads performance timing entries for assertions"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 2000,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "runE2ELoginFlowTest",
+      "description": "E2e test: Tests the login flow including form rendering, input validation, successful login, and redirect to dashboard. Verifies auth state persists across navigation.",
+      "inputs": [
+        {
+          "name": "environment",
+          "type_ref": "TestEnvironment",
+          "required": true,
+          "default": "",
+          "description": "Active test environment with server URL",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "login_form_not_rendered",
+          "condition": "Login form elements not found in DOM",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "validation_not_shown",
+          "condition": "Invalid input does not trigger visible validation errors",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "redirect_failed",
+          "condition": "Successful login does not redirect to dashboard",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "auth_not_persisted",
+          "condition": "Auth state lost on subsequent navigation",
+          "error_type": "AssertionError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Next.js test server is running",
+        "Login page is accessible",
+        "No existing auth session"
+      ],
+      "postconditions": [
+        "Login form renders with email and password fields",
+        "Invalid input shows validation errors",
+        "Valid credentials redirect to dashboard",
+        "Auth cookie/token is set after successful login",
+        "Subsequent navigation retains authenticated state"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "Next.js test server",
+          "description": "Navigates through login flow and subsequent pages"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "runE2EAgentListTest",
+      "description": "E2e test: Navigates to the agents page, verifies all fixture agents are rendered with correct names, roles, statuses, and model info. Tests filtering and sorting if available.",
+      "inputs": [
+        {
+          "name": "environment",
+          "type_ref": "TestEnvironment",
+          "required": true,
+          "default": "",
+          "description": "Active test environment",
+          "validators": []
+        },
+        {
+          "name": "expected_agents",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of FixtureAgent objects expected to be rendered",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "agent_list_empty",
+          "condition": "Agent list renders but shows no agents",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "agent_data_mismatch",
+          "condition": "Rendered agent data does not match fixture data",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "missing_agent",
+          "condition": "One or more expected agents not found in rendered list",
+          "error_type": "AssertionError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Next.js test server is running",
+        "Fixture openclaw.json has been loaded with agent data",
+        "User is authenticated"
+      ],
+      "postconditions": [
+        "Agent list page renders without errors",
+        "Each expected agent appears with correct name, role, status, and model",
+        "Agent count matches expected_agents length",
+        "Agent status indicators use correct visual styling (colors, icons)"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "Next.js test server /agents page",
+          "description": "Navigates to agent list page"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "runE2EProjectCRUDTest",
+      "description": "E2e test: Tests the full project CRUD lifecycle through the UI — create a new project, verify it appears in the list, edit its name and description, verify changes persist, delete it, and verify removal. Covers AC for project management.",
+      "inputs": [
+        {
+          "name": "environment",
+          "type_ref": "TestEnvironment",
+          "required": true,
+          "default": "",
+          "description": "Active test environment",
+          "validators": []
+        },
+        {
+          "name": "new_project",
+          "type_ref": "FixtureProject",
+          "required": true,
+          "default": "",
+          "description": "Project data to create during the test",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "create_form_error",
+          "condition": "Project creation form fails to submit or shows unexpected error",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "project_not_in_list",
+          "condition": "Created project does not appear in project list",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "edit_not_persisted",
+          "condition": "Edited project fields revert on page reload",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "delete_not_confirmed",
+          "condition": "Delete confirmation dialog not shown",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "project_not_removed",
+          "condition": "Deleted project still appears in list",
+          "error_type": "AssertionError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Next.js test server is running",
+        "User is authenticated",
+        "Database is in seeded state"
+      ],
+      "postconditions": [
+        "Create: New project form submits successfully, project appears in list",
+        "Read: Project detail page shows correct name, description, status",
+        "Update: Edit form saves changes, list reflects updated name/description",
+        "Delete: Confirmation dialog shown, project removed from list after confirm",
+        "Database state reflects all CRUD operations"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "Next.js test server /projects pages",
+          "description": "Navigates through project CRUD UI flow"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "CRUD operations modify database state via API"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "runE2ETaskBoardTest",
+      "description": "E2e test: Tests task board interactions — create a task, move it between columns (todo → in_progress → review → done) via drag-and-drop or UI controls, assign it to an agent, verify visual updates. Covers AC for task board.",
+      "inputs": [
+        {
+          "name": "environment",
+          "type_ref": "TestEnvironment",
+          "required": true,
+          "default": "",
+          "description": "Active test environment",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Project ID whose task board to test",
+          "validators": []
+        },
+        {
+          "name": "new_task",
+          "type_ref": "FixtureTask",
+          "required": true,
+          "default": "",
+          "description": "Task data to create during the test",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "task_creation_failed",
+          "condition": "Task form submission fails or task not visible in board",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "drag_drop_failed",
+          "condition": "Drag and drop interaction does not move task to target column",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "assignment_failed",
+          "condition": "Agent assignment UI does not work or assignment not reflected",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "state_not_persisted",
+          "condition": "Task position or assignment lost on page reload",
+          "error_type": "AssertionError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Next.js test server is running",
+        "User is authenticated",
+        "Project with project_id exists in seeded data",
+        "At least one agent exists for assignment"
+      ],
+      "postconditions": [
+        "Task created and visible in the 'todo' column",
+        "Task successfully moved to 'in_progress' column",
+        "Task successfully moved to 'review' column",
+        "Task successfully moved to 'done' column",
+        "Task assigned to an agent, agent avatar/name shown on task card",
+        "Task counts update in column headers",
+        "State persists on page reload"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "Next.js test server /projects/[id]/tasks",
+          "description": "Navigates and interacts with task board UI"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Task create, move, and assign modify database via API"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "runE2EPactPipelineTest",
+      "description": "E2e test: Navigates to the PACT pipeline view for a fixture project, verifies all pipeline stages are rendered with correct names and statuses, verifies active stage is visually highlighted, and stage artifacts are listed. Tests fixture project-alpha pipeline.",
+      "inputs": [
+        {
+          "name": "environment",
+          "type_ref": "TestEnvironment",
+          "required": true,
+          "default": "",
+          "description": "Active test environment",
+          "validators": []
+        },
+        {
+          "name": "expected_pipeline",
+          "type_ref": "FixturePactPipeline",
+          "required": true,
+          "default": "",
+          "description": "Expected pipeline data to assert against",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "pipeline_not_rendered",
+          "condition": "Pipeline visualization component not found in DOM",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "stage_count_mismatch",
+          "condition": "Number of rendered stages does not match expected pipeline",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "stage_status_mismatch",
+          "condition": "One or more stages show incorrect status",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "active_stage_not_highlighted",
+          "condition": "Current active stage not visually distinguished",
+          "error_type": "AssertionError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Next.js test server is running",
+        "User is authenticated",
+        "PACT fixture directory exists with pipeline.json for the project"
+      ],
+      "postconditions": [
+        "Pipeline view page renders without errors",
+        "All stages displayed in correct order with correct names",
+        "Each stage shows correct status (pending/active/completed/failed)",
+        "Active stage is visually distinguished (highlighted, expanded)",
+        "Stage artifacts listed for completed stages",
+        "Agent assignment shown for each stage"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "Next.js test server PACT pipeline page",
+          "description": "Navigates to PACT pipeline view"
+        },
+        {
+          "kind": "reads_file",
+          "target": "PACT fixture directory (via server)",
+          "description": "Server reads PACT pipeline.json from fixture directory"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "runE2EActivityFeedSSETest",
+      "description": "E2e test: Opens the activity feed page, triggers an action that generates an SSE event (e.g., creating a task via API), and verifies the activity feed updates in real-time without page reload. Tests SSE-driven live updates.",
+      "inputs": [
+        {
+          "name": "environment",
+          "type_ref": "TestEnvironment",
+          "required": true,
+          "default": "",
+          "description": "Active test environment",
+          "validators": []
+        },
+        {
+          "name": "trigger_task",
+          "type_ref": "FixtureTask",
+          "required": true,
+          "default": "",
+          "description": "Task to create as the SSE-triggering action",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "feed_not_rendered",
+          "condition": "Activity feed component not found in DOM",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "sse_not_connected",
+          "condition": "SSE connection not established (no connection indicator)",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "live_update_not_received",
+          "condition": "New activity entry does not appear within 5s of triggering action",
+          "error_type": "TimeoutError",
+          "error_data": {}
+        },
+        {
+          "name": "entry_data_incorrect",
+          "condition": "New activity entry shows incorrect data",
+          "error_type": "AssertionError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Next.js test server is running",
+        "User is authenticated",
+        "Activity feed page is accessible",
+        "SSE endpoint /api/events is operational"
+      ],
+      "postconditions": [
+        "Activity feed page renders with existing activity entries",
+        "After task creation, new activity entry appears in feed without reload",
+        "New entry shows correct event type, timestamp, and description",
+        "Feed maintains chronological order (newest first)",
+        "SSE connection indicator shows connected status"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "Next.js test server activity feed page + /api/events SSE",
+          "description": "Opens activity page with SSE connection and triggers events via API"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Creates a task to trigger SSE event"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 5000,
+        "max_memory_mb": null,
+        "complexity": "O(1)"
+      }
+    },
+    {
+      "name": "runE2ECostPageTest",
+      "description": "E2e test: Navigates to the cost tracking page, verifies cost summary cards render with correct totals from fixture data, verifies recharts charts render (token usage, cost over time), and tests date range filtering if available.",
+      "inputs": [
+        {
+          "name": "environment",
+          "type_ref": "TestEnvironment",
+          "required": true,
+          "default": "",
+          "description": "Active test environment",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "cost_page_error",
+          "condition": "Cost page fails to render or shows error boundary",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "charts_not_rendered",
+          "condition": "Recharts SVG elements not found in DOM",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "summary_data_mismatch",
+          "condition": "Cost summary values do not match fixture data",
+          "error_type": "AssertionError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Next.js test server is running",
+        "User is authenticated",
+        "Fixture data includes cost/token usage data"
+      ],
+      "postconditions": [
+        "Cost page renders without errors",
+        "Summary cards show total cost, total tokens, cost per project",
+        "At least one recharts chart renders (SVG elements present)",
+        "Chart data points correspond to fixture data",
+        "No JavaScript errors in browser console"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "Next.js test server /costs page",
+          "description": "Navigates to cost tracking page"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "runIntegrationProjectsAPITest",
+      "description": "Integration test: Tests /api/projects CRUD operations. GET returns all projects, POST creates a project (validates Zod schema), PUT updates project fields, DELETE removes a project. Tests both success and error responses against StandardApiError schema.",
+      "inputs": [
+        {
+          "name": "api_client",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Typed API client configured for the test server",
+          "validators": []
+        },
+        {
+          "name": "test_project",
+          "type_ref": "FixtureProject",
+          "required": true,
+          "default": "",
+          "description": "Project data for create/update operations",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "unexpected_status_code",
+          "condition": "API returns unexpected HTTP status for a given operation",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "response_schema_mismatch",
+          "condition": "Response body does not match expected Zod schema",
+          "error_type": "ValidationError",
+          "error_data": {}
+        },
+        {
+          "name": "missing_error_code",
+          "condition": "Error response lacks required code field",
+          "error_type": "AssertionError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "API client is configured and connected",
+        "Database is in seeded state"
+      ],
+      "postconditions": [
+        "GET /api/projects returns 200 with array of projects matching seed data",
+        "POST /api/projects with valid body returns 201 with created project",
+        "POST /api/projects with invalid body returns 400 with StandardApiError (VALIDATION_ERROR)",
+        "PUT /api/projects/:id with valid body returns 200 with updated project",
+        "PUT /api/projects/:nonexistent returns 404 with StandardApiError (NOT_FOUND)",
+        "DELETE /api/projects/:id returns 200 or 204",
+        "DELETE /api/projects/:nonexistent returns 404",
+        "All success responses validate against project Zod schema",
+        "All error responses validate against StandardApiError schema"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "/api/projects",
+          "description": "Makes CRUD HTTP requests to projects API"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Create, update, delete operations modify project data"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "runIntegrationTasksAPITest",
+      "description": "Integration test: Tests /api/tasks CRUD operations. Validates task creation with project_id reference, status transitions, agent assignment, priority constraints, and error cases (invalid project_id, invalid status, etc.).",
+      "inputs": [
+        {
+          "name": "api_client",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Typed API client configured for the test server",
+          "validators": []
+        },
+        {
+          "name": "test_task",
+          "type_ref": "FixtureTask",
+          "required": true,
+          "default": "",
+          "description": "Task data for create/update operations",
+          "validators": []
+        },
+        {
+          "name": "valid_project_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ID of an existing project from seed data for FK reference",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "fk_violation_not_caught",
+          "condition": "Invalid project_id accepted without error",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "validation_bypass",
+          "condition": "Invalid priority or status values accepted",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "response_schema_mismatch",
+          "condition": "Response body does not match expected Zod schema",
+          "error_type": "ValidationError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "API client is configured",
+        "Database is in seeded state with at least one project and one agent"
+      ],
+      "postconditions": [
+        "GET /api/tasks returns 200 with array of tasks",
+        "GET /api/tasks?project_id=X filters by project",
+        "POST /api/tasks with valid body returns 201",
+        "POST /api/tasks with invalid project_id returns 400 or 404",
+        "POST /api/tasks with priority outside 1-5 returns 400 (VALIDATION_ERROR)",
+        "PUT /api/tasks/:id status field changes persist",
+        "PUT /api/tasks/:id assigned_agent_id field changes persist",
+        "DELETE /api/tasks/:id returns 200 or 204",
+        "All responses validate against appropriate Zod schemas"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "/api/tasks",
+          "description": "Makes CRUD HTTP requests to tasks API"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Task CRUD operations modify database state"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "runIntegrationAgentsAPITest",
+      "description": "Integration test: Tests /api/agents read-only operations. GET returns all agents from fixture openclaw.json. GET /:id returns a single agent. Tests 404 for non-existent agent ID. Validates response against agent Zod schema.",
+      "inputs": [
+        {
+          "name": "api_client",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Typed API client configured for the test server",
+          "validators": []
+        },
+        {
+          "name": "expected_agents",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of FixtureAgent objects expected from the API",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "agent_count_mismatch",
+          "condition": "Number of returned agents does not match expected",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "agent_data_mismatch",
+          "condition": "Agent fields do not match fixture data",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "missing_404_on_nonexistent",
+          "condition": "Non-existent agent ID does not return 404",
+          "error_type": "AssertionError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "API client is configured",
+        "Fixture openclaw.json is loaded with agent data"
+      ],
+      "postconditions": [
+        "GET /api/agents returns 200 with array matching expected_agents count",
+        "Each agent in response has id, name, role, status, model fields",
+        "GET /api/agents/:validId returns 200 with matching agent",
+        "GET /api/agents/:nonexistent returns 404 with StandardApiError",
+        "Agent data matches fixture openclaw.json values exactly",
+        "All responses validate against agent Zod schema"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "/api/agents",
+          "description": "Makes GET requests to agents API"
+        },
+        {
+          "kind": "reads_file",
+          "target": "Fixture openclaw.json (via server)",
+          "description": "Server reads agent data from fixture file"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "runIntegrationPactAPITest",
+      "description": "Integration test: Tests /api/pact read-only operations. GET /api/pact/pipelines returns all pipelines. GET /api/pact/pipelines/:projectId returns a specific pipeline. Tests graceful handling of missing/malformed pipeline.json files. Validates responses against PACT Zod schemas.",
+      "inputs": [
+        {
+          "name": "api_client",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "Typed API client configured for the test server",
+          "validators": []
+        },
+        {
+          "name": "expected_pipeline",
+          "type_ref": "FixturePactPipeline",
+          "required": true,
+          "default": "",
+          "description": "Expected pipeline data for the fixture project",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "pipeline_not_found",
+          "condition": "Valid project but missing pipeline.json returns wrong status",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "malformed_pipeline_crashes",
+          "condition": "Malformed pipeline.json causes server error instead of graceful 422/500",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "stage_order_wrong",
+          "condition": "Pipeline stages returned in wrong order",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "response_schema_mismatch",
+          "condition": "Response does not match PACT pipeline Zod schema",
+          "error_type": "ValidationError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "API client is configured",
+        "PACT fixture directory exists with at least one valid pipeline.json"
+      ],
+      "postconditions": [
+        "GET /api/pact/pipelines returns 200 with array of pipelines",
+        "GET /api/pact/pipelines/:validProjectId returns 200 with pipeline matching expected_pipeline",
+        "GET /api/pact/pipelines/:nonexistent returns 404 with StandardApiError",
+        "Pipeline response includes stages array with correct order and status",
+        "Malformed pipeline.json returns 500 or 422 with descriptive error (never crashes server)",
+        "All valid responses validate against PACT pipeline Zod schema"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "/api/pact/pipelines",
+          "description": "Makes GET requests to PACT API"
+        },
+        {
+          "kind": "reads_file",
+          "target": "PACT fixture directory (via server)",
+          "description": "Server reads pipeline.json from fixture PACT directories"
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "runIntegrationSSEEndpointTest",
+      "description": "Integration test: Tests /api/events SSE endpoint. Verifies connection establishment, event stream format (event: type, data: JSON, id: optional), event filtering by type parameter, and graceful reconnection. Uses the fetch-based SSE test client.",
+      "inputs": [
+        {
+          "name": "sse_client_config",
+          "type_ref": "SSEClientConfig",
+          "required": true,
+          "default": "",
+          "description": "SSE client configuration for the test",
+          "validators": []
+        },
+        {
+          "name": "api_client",
+          "type_ref": "dict",
+          "required": true,
+          "default": "",
+          "description": "API client to trigger events (e.g., create task to generate task_update event)",
+          "validators": []
+        }
+      ],
+      "output_type": "TestResult",
+      "error_cases": [
+        {
+          "name": "connection_not_sse",
+          "condition": "Endpoint does not return text/event-stream content type",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "event_not_received",
+          "condition": "Triggered action does not produce expected SSE event within timeout",
+          "error_type": "TimeoutError",
+          "error_data": {}
+        },
+        {
+          "name": "event_format_invalid",
+          "condition": "SSE event does not follow event: / data: / id: format",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "filter_not_applied",
+          "condition": "Events of filtered-out types are still received",
+          "error_type": "AssertionError",
+          "error_data": {}
+        },
+        {
+          "name": "event_payload_invalid",
+          "condition": "Event data JSON does not validate against schema",
+          "error_type": "ValidationError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [
+        "Next.js test server is running with SSE endpoint active",
+        "Database is in seeded state"
+      ],
+      "postconditions": [
+        "SSE connection established successfully (200 with text/event-stream content-type)",
+        "Connection sends proper SSE headers (Cache-Control: no-cache, Connection: keep-alive)",
+        "Triggered actions produce SSE events with correct type and data",
+        "Event data validates against SSETestEvent schema",
+        "Event filter parameter limits received events to specified types",
+        "Client disconnect is clean (no server errors)"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "network_call",
+          "target": "/api/events SSE endpoint",
+          "description": "Establishes SSE connection and receives events"
+        },
+        {
+          "kind": "network_call",
+          "target": "/api/tasks (trigger)",
+          "description": "Creates task to trigger SSE event"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Task creation modifies database to trigger events"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 5000,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n = number of events collected"
+      }
+    },
+    {
+      "name": "getPlaywrightConfig",
+      "description": "Returns the Playwright configuration object. Defines multi-browser projects (Chromium required, Firefox and WebKit optional), webServer config pointing at Next.js dev server, global setup/teardown paths, test directory patterns, reporter config, and retry/timeout settings.",
+      "inputs": [
+        {
+          "name": "ci_mode",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether running in CI (enables all browsers, stricter timeouts, screenshot on failure)",
+          "validators": []
+        },
+        {
+          "name": "base_url",
+          "type_ref": "str",
+          "required": false,
+          "default": "http://localhost:3000",
+          "description": "Base URL for the Next.js test server",
+          "validators": []
+        }
+      ],
+      "output_type": "dict",
+      "error_cases": [
+        {
+          "name": "invalid_base_url",
+          "condition": "base_url is not a valid URL",
+          "error_type": "ValidationError",
+          "error_data": {}
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "Returned config includes at least 'chromium' project",
+        "In CI mode, 'firefox' and 'webkit' projects are also included",
+        "webServer config starts Next.js on the specified port",
+        "Global setup points to tests/global-setup.ts",
+        "Global teardown points to tests/global-teardown.ts",
+        "Test match patterns include tests/e2e/**/*.spec.ts and tests/integration/**/*.spec.ts",
+        "Timeout set to 30s per test, navigation timeout 15s",
+        "Retries set to 2 in CI, 0 locally",
+        "Screenshot on failure enabled in CI"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    }
+  ],
+  "dependencies": [
+    "api_routes",
+    "data_access_layer",
+    "sse_event_bus",
+    "pact_integration",
+    "openclaw_reader",
+    "sqlite_database"
+  ],
+  "dependency_contracts": {
+    "api_routes": [
+      "GET /api/projects",
+      "POST /api/projects",
+      "PUT /api/projects/:id",
+      "DELETE /api/projects/:id",
+      "GET /api/tasks",
+      "POST /api/tasks",
+      "PUT /api/tasks/:id",
+      "DELETE /api/tasks/:id",
+      "GET /api/agents",
+      "GET /api/agents/:id",
+      "GET /api/pact/pipelines",
+      "GET /api/pact/pipelines/:projectId",
+      "GET /api/events (SSE)"
+    ],
+    "data_access_layer": [
+      "All data access via lib/data/ layer",
+      "Filesystem reads for OpenClaw and PACT data",
+      "SQLite queries for dashboard data"
+    ],
+    "sse_event_bus": [
+      "SSE multiplexed event stream at /api/events",
+      "Event types: agent_update, task_update, project_update, pact_update, activity"
+    ],
+    "pact_integration": [
+      "PACT pipeline JSON parsing",
+      "PACT session directory reading"
+    ],
+    "openclaw_reader": [
+      "openclaw.json config parsing",
+      "Agent session state reading"
+    ],
+    "sqlite_database": [
+      "Schema from lib/db/schema.sql",
+      "Typed query wrappers"
+    ]
+  },
+  "invariants": [
+    "All tests run against fixture data only — no running OpenClaw instance or PACT daemon required",
+    "No test may import or require openclaw or pact as direct library dependencies",
+    "All API response assertions validate against the same Zod schemas used in production route handlers",
+    "All error responses conform to the StandardApiError shape with a typed ErrorCode",
+    "Database state is isolated per Playwright worker via per-worker database copies",
+    "Global setup must complete before any test worker starts",
+    "Global teardown must run even if tests fail (best-effort cleanup)",
+    "E2e tests use Page Object Models for all page interactions — no raw selectors in test bodies",
+    "Performance-tagged tests (@performance) run only in Chromium project",
+    "PACT file parsers must handle missing or malformed files gracefully — never crash on bad data",
+    "SSE integration tests must verify both event format and payload schema",
+    "All factory functions produce valid fixture objects that pass their own Zod schemas",
+    "Test fixtures are read-only during test execution — mutations go through API routes to the worker database",
+    "Chromium browser project is always required; Firefox and WebKit are optional in local dev",
+    "Tests must not depend on execution order — each test is independently runnable",
+    "No duplicate type definitions — all types imported from lib/types/ or defined in this test component",
+    "Files must stay under 250 lines per project standards; test helpers and POMs split into separate modules"
+  ],
+  "requires": [
+    "playwright",
+    "better-sqlite3",
+    "zod",
+    "next"
+  ],
+  "processing_register": "pragmatic-implementation"
+}

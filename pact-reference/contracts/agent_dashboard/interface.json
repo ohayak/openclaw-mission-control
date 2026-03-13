@@ -1,0 +1,2727 @@
+{
+  "component_id": "agent_dashboard",
+  "name": "Agent Overview & Detail Pages",
+  "description": "Agent list page showing all agents from openclaw.json: name, status indicator (active/idle/error), current session info, assigned tasks (joined from SQLite), cumulative token usage. Agent detail page with session history, token usage over time chart (recharts line chart), assigned tasks list, and activity feed filtered to this agent. Handles missing/malformed openclaw.json with error state UI (AC2). All data fetched via lib/data/ layer. Layered architecture: Domain Types → Zod Schemas → Data Access → API Responses → Component Props → SSE Events.",
+  "version": 1,
+  "types": [
+    {
+      "name": "AgentId",
+      "kind": "primitive",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Branded string type for agent identifiers. Runtime: string. Compile-time: branded via `string & { readonly __brand: 'AgentId' }`. Must be non-empty, lowercase alphanumeric with hyphens only."
+    },
+    {
+      "name": "AgentStatusKind",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "active",
+        "idle",
+        "error"
+      ],
+      "inner_types": [],
+      "description": "Discriminant for the AgentStatus union. Determines which contextual fields are present."
+    },
+    {
+      "name": "AgentStatusActive",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Literal 'active'",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value === 'active'",
+              "error_message": "kind must be 'active'"
+            }
+          ]
+        },
+        {
+          "name": "current_session_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ID of the currently running session.",
+          "validators": []
+        },
+        {
+          "name": "started_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp when current session started.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+              "error_message": "Must be ISO 8601 UTC timestamp"
+            }
+          ]
+        },
+        {
+          "name": "current_task_description",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Human-readable description of what the agent is currently working on.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Status payload when agent is actively running a session."
+    },
+    {
+      "name": "AgentStatusIdle",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Literal 'idle'",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value === 'idle'",
+              "error_message": "kind must be 'idle'"
+            }
+          ]
+        },
+        {
+          "name": "last_active_at",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ISO 8601 timestamp of last activity. Empty string if never active.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Status payload when agent is idle (not running)."
+    },
+    {
+      "name": "AgentStatusError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Literal 'error'",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value === 'error'",
+              "error_message": "kind must be 'error'"
+            }
+          ]
+        },
+        {
+          "name": "error_message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error description.",
+          "validators": []
+        },
+        {
+          "name": "error_code",
+          "type_ref": "str",
+          "required": false,
+          "default": "unknown",
+          "description": "Machine-readable error code, e.g. 'session_crash', 'config_invalid'.",
+          "validators": []
+        },
+        {
+          "name": "occurred_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp when error occurred.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+              "error_message": "Must be ISO 8601 UTC timestamp"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Status payload when agent is in an error state."
+    },
+    {
+      "name": "AgentStatus",
+      "kind": "union",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "AgentStatusActive",
+        "AgentStatusIdle",
+        "AgentStatusError"
+      ],
+      "description": "Discriminated union of agent status variants. Discriminant field: 'kind'."
+    },
+    {
+      "name": "TokenUsageSummary",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "total_input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total prompt/input tokens consumed across all sessions.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "total_output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total completion/output tokens consumed across all sessions.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "total_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Sum of input + output tokens.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "estimated_cost_usd",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Estimated cumulative cost in USD based on model pricing.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0.0",
+              "error_message": "Cost cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "session_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of sessions contributing to this summary.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Session count cannot be negative"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Cumulative token usage counters for an agent."
+    },
+    {
+      "name": "Agent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Unique agent identifier (branded string).",
+          "validators": []
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable agent name from openclaw.json.",
+          "validators": []
+        },
+        {
+          "name": "model",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "LLM model identifier, e.g. 'claude-sonnet-4-20250514'.",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "AgentStatus",
+          "required": true,
+          "default": "",
+          "description": "Current agent status as discriminated union.",
+          "validators": []
+        },
+        {
+          "name": "token_usage",
+          "type_ref": "TokenUsageSummary",
+          "required": true,
+          "default": "",
+          "description": "Cumulative token usage summary.",
+          "validators": []
+        },
+        {
+          "name": "assigned_task_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of tasks currently assigned to this agent (from SQLite).",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Task count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "tags",
+          "type_ref": "list",
+          "required": false,
+          "default": "[]",
+          "description": "Optional tags/labels from openclaw config.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Summary representation of an agent for the list page. Composed from openclaw.json (name, model, status) joined with SQLite (tasks, tokens)."
+    },
+    {
+      "name": "AgentSession",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "session_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique session identifier.",
+          "validators": []
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent that ran this session.",
+          "validators": []
+        },
+        {
+          "name": "started_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 start timestamp.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+              "error_message": "Must be ISO 8601 UTC timestamp"
+            }
+          ]
+        },
+        {
+          "name": "ended_at",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ISO 8601 end timestamp. Empty string if session is still active.",
+          "validators": []
+        },
+        {
+          "name": "duration_seconds",
+          "type_ref": "int",
+          "required": false,
+          "default": "0",
+          "description": "Session duration in seconds. 0 if still active.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Duration cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Input tokens consumed in this session.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Output tokens consumed in this session.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "total_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total tokens in this session.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "cost_usd",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Estimated cost for this session in USD.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0.0",
+              "error_message": "Cost cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "exit_status",
+          "type_ref": "SessionExitStatus",
+          "required": false,
+          "default": "running",
+          "description": "How the session ended.",
+          "validators": []
+        },
+        {
+          "name": "task_description",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "What was being worked on.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single agent work session with timing and token data."
+    },
+    {
+      "name": "SessionExitStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "running",
+        "completed",
+        "error",
+        "timeout",
+        "cancelled"
+      ],
+      "inner_types": [],
+      "description": "How an agent session terminated."
+    },
+    {
+      "name": "AgentTask",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "task_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique task identifier.",
+          "validators": []
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Assigned agent.",
+          "validators": []
+        },
+        {
+          "name": "title",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Task title.",
+          "validators": []
+        },
+        {
+          "name": "description",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Task description.",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "TaskStatus",
+          "required": true,
+          "default": "",
+          "description": "Current task status.",
+          "validators": []
+        },
+        {
+          "name": "priority",
+          "type_ref": "TaskPriority",
+          "required": true,
+          "default": "",
+          "description": "Task priority level.",
+          "validators": []
+        },
+        {
+          "name": "created_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 creation timestamp.",
+          "validators": []
+        },
+        {
+          "name": "updated_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 last update timestamp.",
+          "validators": []
+        },
+        {
+          "name": "completed_at",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "ISO 8601 completion timestamp. Empty if not completed.",
+          "validators": []
+        },
+        {
+          "name": "project_id",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Associated project identifier.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A task assigned to an agent, stored in SQLite."
+    },
+    {
+      "name": "TaskStatus",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "pending",
+        "in_progress",
+        "completed",
+        "failed",
+        "cancelled"
+      ],
+      "inner_types": [],
+      "description": "Task lifecycle status."
+    },
+    {
+      "name": "TaskPriority",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "inner_types": [],
+      "description": "Task priority levels."
+    },
+    {
+      "name": "TokenUsageDataPoint",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp representing the start of the time bucket.",
+          "validators": []
+        },
+        {
+          "name": "input_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Input tokens consumed in this bucket.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "output_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Output tokens consumed in this bucket.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "total_tokens",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total tokens in this bucket.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Token count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "cost_usd",
+          "type_ref": "float",
+          "required": true,
+          "default": "",
+          "description": "Estimated cost in this bucket.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0.0",
+              "error_message": "Cost cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "session_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Number of sessions in this bucket.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Count cannot be negative"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single data point for the recharts token usage line chart. Keyed by time bucket."
+    },
+    {
+      "name": "AgentDetail",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent",
+          "type_ref": "Agent",
+          "required": true,
+          "default": "",
+          "description": "Core agent summary data.",
+          "validators": []
+        },
+        {
+          "name": "recent_sessions",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Most recent sessions for this agent, ordered newest-first.",
+          "validators": []
+        },
+        {
+          "name": "assigned_tasks",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Tasks currently assigned to this agent.",
+          "validators": []
+        },
+        {
+          "name": "token_usage_timeline",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Time-series token usage data for chart rendering.",
+          "validators": []
+        },
+        {
+          "name": "total_sessions",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total session count for pagination.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Count cannot be negative"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Full agent detail for the detail page. Extends Agent with session history, tasks, and chart data."
+    },
+    {
+      "name": "TimeRange",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "1h",
+        "6h",
+        "24h",
+        "7d",
+        "30d",
+        "all"
+      ],
+      "inner_types": [],
+      "description": "Predefined time range for filtering token usage data."
+    },
+    {
+      "name": "PaginationParams",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "page",
+          "type_ref": "int",
+          "required": true,
+          "default": "1",
+          "description": "1-based page number.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=1",
+              "error_message": "Page must be >= 1"
+            }
+          ]
+        },
+        {
+          "name": "page_size",
+          "type_ref": "int",
+          "required": true,
+          "default": "20",
+          "description": "Items per page.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=1 && <=100",
+              "error_message": "Page size must be between 1 and 100"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Pagination parameters for list queries."
+    },
+    {
+      "name": "PaginatedResult",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "items",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "The items for the current page.",
+          "validators": []
+        },
+        {
+          "name": "total_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total number of items across all pages.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Count cannot be negative"
+            }
+          ]
+        },
+        {
+          "name": "page",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Current page number.",
+          "validators": []
+        },
+        {
+          "name": "page_size",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Items per page.",
+          "validators": []
+        },
+        {
+          "name": "has_next",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether there is a next page.",
+          "validators": []
+        },
+        {
+          "name": "has_previous",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Whether there is a previous page.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Generic paginated result wrapper."
+    },
+    {
+      "name": "DataErrorKind",
+      "kind": "enum",
+      "fields": [],
+      "item_type": "",
+      "variants": [
+        "file_not_found",
+        "file_parse_error",
+        "db_error",
+        "agent_not_found",
+        "validation_error"
+      ],
+      "inner_types": [],
+      "description": "Discriminant for DataError union. Categorizes data access failures."
+    },
+    {
+      "name": "DataError",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type_ref": "DataErrorKind",
+          "required": true,
+          "default": "",
+          "description": "Error category discriminant.",
+          "validators": []
+        },
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error message.",
+          "validators": []
+        },
+        {
+          "name": "source_path",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "File path or DB table that caused the error.",
+          "validators": []
+        },
+        {
+          "name": "details",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Additional structured error context (e.g., Zod issues, SQL error code).",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Structured error type returned from data access layer. Part of Result<T, DataError> pattern."
+    },
+    {
+      "name": "ResultOk",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ok",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Literal true.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value === true",
+              "error_message": "ok must be true for success result"
+            }
+          ]
+        },
+        {
+          "name": "data",
+          "type_ref": "any",
+          "required": true,
+          "default": "",
+          "description": "The success payload. Actual type depends on the function returning this Result.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Success variant of Result<T, DataError>."
+    },
+    {
+      "name": "ResultErr",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ok",
+          "type_ref": "bool",
+          "required": true,
+          "default": "",
+          "description": "Literal false.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value === false",
+              "error_message": "ok must be false for error result"
+            }
+          ]
+        },
+        {
+          "name": "error",
+          "type_ref": "DataError",
+          "required": true,
+          "default": "",
+          "description": "The structured error.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Error variant of Result<T, DataError>."
+    },
+    {
+      "name": "Result",
+      "kind": "union",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "ResultOk",
+        "ResultErr"
+      ],
+      "description": "Discriminated union for fallible data access operations. Discriminant: 'ok'. Replaces thrown exceptions with explicit error handling."
+    },
+    {
+      "name": "AgentRawConfig",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Agent identifier from config.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-z0-9-]+$",
+              "error_message": "Agent ID must be lowercase alphanumeric with hyphens"
+            }
+          ]
+        },
+        {
+          "name": "name",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Display name.",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": ">=1 && <=128",
+              "error_message": "Name must be 1-128 characters"
+            }
+          ]
+        },
+        {
+          "name": "model",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Model identifier string.",
+          "validators": []
+        },
+        {
+          "name": "status",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Raw status string from config. Mapped to AgentStatus union.",
+          "validators": []
+        },
+        {
+          "name": "current_session",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Raw current session data if active. May be null/missing.",
+          "validators": []
+        },
+        {
+          "name": "tags",
+          "type_ref": "list",
+          "required": false,
+          "default": "[]",
+          "description": "Optional tags.",
+          "validators": []
+        },
+        {
+          "name": "error",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Raw error data if status is error.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Raw agent entry as parsed from openclaw.json before domain mapping. Validated via Zod AgentRawSchema."
+    },
+    {
+      "name": "OpenClawConfig",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "version",
+          "type_ref": "str",
+          "required": false,
+          "default": "1",
+          "description": "Config file version.",
+          "validators": []
+        },
+        {
+          "name": "agents",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of agent configurations.",
+          "validators": []
+        },
+        {
+          "name": "base_path",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Base directory for OpenClaw data.",
+          "validators": []
+        },
+        {
+          "name": "sessions_dir",
+          "type_ref": "str",
+          "required": false,
+          "default": "sessions",
+          "description": "Directory containing session data files.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Top-level openclaw.json structure. Validated via Zod OpenClawConfigSchema."
+    },
+    {
+      "name": "AgentListResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agents",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "List of all agents.",
+          "validators": []
+        },
+        {
+          "name": "total_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total number of agents.",
+          "validators": []
+        },
+        {
+          "name": "fetched_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp when data was fetched. Used for cache invalidation.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "API response shape for GET /api/agents. Wire format."
+    },
+    {
+      "name": "AgentDetailResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent",
+          "type_ref": "AgentDetail",
+          "required": true,
+          "default": "",
+          "description": "Full agent detail.",
+          "validators": []
+        },
+        {
+          "name": "fetched_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp when data was fetched.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "API response shape for GET /api/agents/[agentId]. Wire format."
+    },
+    {
+      "name": "AgentErrorResponse",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "error",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Error type identifier.",
+          "validators": []
+        },
+        {
+          "name": "message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error message.",
+          "validators": []
+        },
+        {
+          "name": "details",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Additional structured error info.",
+          "validators": []
+        },
+        {
+          "name": "status_code",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "HTTP status code.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=400 && <=599",
+              "error_message": "Error status code must be 4xx or 5xx"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "API error response shape for agent endpoints."
+    },
+    {
+      "name": "AgentCardProps",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent",
+          "type_ref": "Agent",
+          "required": true,
+          "default": "",
+          "description": "Agent summary data to render.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Props for the AgentCard component displayed in the agent list. Server component."
+    },
+    {
+      "name": "AgentStatusBadgeProps",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "status",
+          "type_ref": "AgentStatus",
+          "required": true,
+          "default": "",
+          "description": "Agent status to render as badge.",
+          "validators": []
+        },
+        {
+          "name": "size",
+          "type_ref": "str",
+          "required": false,
+          "default": "md",
+          "description": "Badge size variant.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "['sm', 'md', 'lg'].includes(value)",
+              "error_message": "Size must be sm, md, or lg"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Props for the AgentStatusBadge component. Client component for animated indicators."
+    },
+    {
+      "name": "TokenUsageChartProps",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "data",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Time-series data points for the chart.",
+          "validators": []
+        },
+        {
+          "name": "time_range",
+          "type_ref": "TimeRange",
+          "required": true,
+          "default": "",
+          "description": "Currently selected time range for display.",
+          "validators": []
+        },
+        {
+          "name": "on_time_range_change",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Callback function name/ref for time range changes. Typed as (range: TimeRange) => void at runtime.",
+          "validators": []
+        },
+        {
+          "name": "height",
+          "type_ref": "int",
+          "required": false,
+          "default": "300",
+          "description": "Chart height in pixels.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=100 && <=800",
+              "error_message": "Chart height must be between 100 and 800 pixels"
+            }
+          ]
+        },
+        {
+          "name": "show_cost_axis",
+          "type_ref": "bool",
+          "required": false,
+          "default": "true",
+          "description": "Whether to show the secondary cost USD axis.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Props for the TokenUsageChart recharts LineChart component. Client component ('use client')."
+    },
+    {
+      "name": "AgentActivityFeedProps",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent to filter activity events for.",
+          "validators": []
+        },
+        {
+          "name": "initial_events",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Pre-loaded activity events for SSR.",
+          "validators": []
+        },
+        {
+          "name": "max_visible",
+          "type_ref": "int",
+          "required": false,
+          "default": "50",
+          "description": "Max events to display before scrolling.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=10 && <=500",
+              "error_message": "max_visible must be between 10 and 500"
+            }
+          ]
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Props for the AgentActivityFeed component. Client component for SSE-driven live updates."
+    },
+    {
+      "name": "AgentActivityEvent",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "event_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Unique event identifier.",
+          "validators": []
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent this event belongs to.",
+          "validators": []
+        },
+        {
+          "name": "event_type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Event type string, e.g. 'session_started', 'task_completed'.",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 event timestamp.",
+          "validators": []
+        },
+        {
+          "name": "summary",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable event summary.",
+          "validators": []
+        },
+        {
+          "name": "metadata",
+          "type_ref": "dict",
+          "required": false,
+          "default": "{}",
+          "description": "Event-specific metadata.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "A single activity event for the agent activity feed."
+    },
+    {
+      "name": "AgentSessionListProps",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "sessions",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Session list to display.",
+          "validators": []
+        },
+        {
+          "name": "total_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Total sessions for pagination.",
+          "validators": []
+        },
+        {
+          "name": "current_page",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Current page number.",
+          "validators": []
+        },
+        {
+          "name": "page_size",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Items per page.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Props for the AgentSessionList component on the detail page."
+    },
+    {
+      "name": "AgentTaskListProps",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "tasks",
+          "type_ref": "list",
+          "required": true,
+          "default": "",
+          "description": "Tasks assigned to this agent.",
+          "validators": []
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent these tasks belong to.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Props for the AgentTaskList component on the detail page."
+    },
+    {
+      "name": "SSEAgentStatusChanged",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Literal 'agent:status-changed'.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value === 'agent:status-changed'",
+              "error_message": "type must be 'agent:status-changed'"
+            }
+          ]
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent whose status changed.",
+          "validators": []
+        },
+        {
+          "name": "previous_status",
+          "type_ref": "AgentStatusKind",
+          "required": true,
+          "default": "",
+          "description": "Previous status kind.",
+          "validators": []
+        },
+        {
+          "name": "new_status",
+          "type_ref": "AgentStatus",
+          "required": true,
+          "default": "",
+          "description": "New full status object.",
+          "validators": []
+        },
+        {
+          "name": "timestamp",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 timestamp of the change.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "SSE event: agent:status-changed. Emitted when an agent's status transitions."
+    },
+    {
+      "name": "SSEAgentSessionStarted",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Literal 'agent:session-started'.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value === 'agent:session-started'",
+              "error_message": "type must be 'agent:session-started'"
+            }
+          ]
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent that started the session.",
+          "validators": []
+        },
+        {
+          "name": "session_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "New session identifier.",
+          "validators": []
+        },
+        {
+          "name": "started_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 session start timestamp.",
+          "validators": []
+        },
+        {
+          "name": "task_description",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "What the session is working on.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "SSE event: agent:session-started. Emitted when a new agent session begins."
+    },
+    {
+      "name": "SSEAgentSessionEnded",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Literal 'agent:session-ended'.",
+          "validators": [
+            {
+              "kind": "custom",
+              "expression": "value === 'agent:session-ended'",
+              "error_message": "type must be 'agent:session-ended'"
+            }
+          ]
+        },
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent whose session ended.",
+          "validators": []
+        },
+        {
+          "name": "session_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Ended session identifier.",
+          "validators": []
+        },
+        {
+          "name": "ended_at",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "ISO 8601 session end timestamp.",
+          "validators": []
+        },
+        {
+          "name": "exit_status",
+          "type_ref": "SessionExitStatus",
+          "required": true,
+          "default": "",
+          "description": "How the session ended.",
+          "validators": []
+        },
+        {
+          "name": "token_usage",
+          "type_ref": "TokenUsageSummary",
+          "required": true,
+          "default": "",
+          "description": "Token usage for the ended session.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "SSE event: agent:session-ended. Emitted when an agent session completes or fails."
+    },
+    {
+      "name": "SSEAgentEvent",
+      "kind": "union",
+      "fields": [],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [
+        "SSEAgentStatusChanged",
+        "SSEAgentSessionStarted",
+        "SSEAgentSessionEnded"
+      ],
+      "description": "Discriminated union of all agent-related SSE events. Discriminant field: 'type'. These are namespaced members of the broader SSE event bus."
+    },
+    {
+      "name": "AgentListErrorStateProps",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "error_kind",
+          "type_ref": "DataErrorKind",
+          "required": true,
+          "default": "",
+          "description": "The kind of error that occurred.",
+          "validators": []
+        },
+        {
+          "name": "error_message",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Human-readable error for display.",
+          "validators": []
+        },
+        {
+          "name": "config_path",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "The path that was attempted for openclaw.json.",
+          "validators": []
+        },
+        {
+          "name": "on_retry",
+          "type_ref": "str",
+          "required": false,
+          "default": "",
+          "description": "Callback ref for retry action. Typed as () => void at runtime.",
+          "validators": []
+        }
+      ],
+      "item_type": "",
+      "variants": [],
+      "inner_types": [],
+      "description": "Props for the error state UI shown when openclaw.json is missing or malformed (AC2)."
+    }
+  ],
+  "functions": [
+    {
+      "name": "parseOpenClawConfig",
+      "description": "Parse and validate openclaw.json from the filesystem using Zod OpenClawConfigSchema.safeParse(). Returns the parsed config or a structured DataError. Located in lib/openclaw/schemas.ts.",
+      "inputs": [
+        {
+          "name": "config_path",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Absolute filesystem path to openclaw.json.",
+          "validators": [
+            {
+              "kind": "length",
+              "expression": ">=1",
+              "error_message": "Config path cannot be empty"
+            }
+          ]
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "file_not_found",
+          "condition": "openclaw.json does not exist at config_path",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_not_found"
+          }
+        },
+        {
+          "name": "file_read_error",
+          "condition": "File exists but cannot be read (permissions, IO error)",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_parse_error"
+          }
+        },
+        {
+          "name": "invalid_json",
+          "condition": "File content is not valid JSON",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_parse_error"
+          }
+        },
+        {
+          "name": "schema_validation_failed",
+          "condition": "JSON is valid but does not match OpenClawConfigSchema",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "validation_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "config_path is an absolute filesystem path"
+      ],
+      "postconditions": [
+        "On success (ok=true), data is a valid OpenClawConfig",
+        "On file_not_found error, source_path matches config_path",
+        "On file_parse_error, details contains Zod validation issues",
+        "Never throws — all errors are returned as ResultErr"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "openclaw.json at config_path",
+          "description": "Reads and parses the OpenClaw configuration file using fs/promises.readFile()"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": "O(n) where n = number of agents in config"
+      }
+    },
+    {
+      "name": "mapRawAgentToDomain",
+      "description": "Transform a raw AgentRawConfig (from Zod parse) into the domain Agent type. Maps raw status strings to the AgentStatus discriminated union. Pure function in lib/openclaw/schemas.ts.",
+      "inputs": [
+        {
+          "name": "raw",
+          "type_ref": "AgentRawConfig",
+          "required": true,
+          "default": "",
+          "description": "Raw agent config from Zod parse.",
+          "validators": []
+        },
+        {
+          "name": "token_usage",
+          "type_ref": "TokenUsageSummary",
+          "required": true,
+          "default": "",
+          "description": "Pre-fetched token usage summary for this agent.",
+          "validators": []
+        },
+        {
+          "name": "assigned_task_count",
+          "type_ref": "int",
+          "required": true,
+          "default": "",
+          "description": "Pre-fetched count of assigned tasks from SQLite.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=0",
+              "error_message": "Task count cannot be negative"
+            }
+          ]
+        }
+      ],
+      "output_type": "Agent",
+      "error_cases": [
+        {
+          "name": "unknown_status",
+          "condition": "raw.status is not 'active', 'idle', or 'error'",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "validation_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "raw has passed Zod schema validation"
+      ],
+      "postconditions": [
+        "Returned Agent.id is a branded AgentId equal to raw.id",
+        "Agent.status.kind matches raw.status (mapped to valid AgentStatusKind)",
+        "Agent.token_usage === token_usage parameter",
+        "Agent.assigned_task_count === assigned_task_count parameter"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "none",
+          "target": "",
+          "description": ""
+        }
+      ],
+      "performance_budget": null
+    },
+    {
+      "name": "getAgents",
+      "description": "Fetch all agents from openclaw.json, join with SQLite for task counts and token usage. Returns the full agent list. Located in lib/data/agents.ts.",
+      "inputs": [],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "config_not_found",
+          "condition": "openclaw.json does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_not_found"
+          }
+        },
+        {
+          "name": "config_parse_error",
+          "condition": "openclaw.json is malformed or invalid",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_parse_error"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite query for tasks or token usage fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "db_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "OpenClaw config path is configured in environment or lib/openclaw/config"
+      ],
+      "postconditions": [
+        "On success, data is list of Agent objects sorted by name alphabetically",
+        "Each Agent has accurate assigned_task_count from SQLite",
+        "Each Agent has accurate token_usage from session data",
+        "On file_not_found or parse error, returns ResultErr (never throws)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "openclaw.json",
+          "description": "Reads agent config from filesystem via parseOpenClawConfig"
+        },
+        {
+          "kind": "reads_file",
+          "target": "session data files",
+          "description": "Reads session directories for token usage aggregation"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Reads task assignments from SQLite via better-sqlite3 (read-only query)"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": "O(a * (s + t)) where a = agents, s = sessions per agent, t = tasks per agent"
+      }
+    },
+    {
+      "name": "getAgentById",
+      "description": "Fetch a single agent by ID. Returns Agent summary or agent_not_found error. Located in lib/data/agents.ts.",
+      "inputs": [
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "The agent identifier to look up.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-z0-9-]+$",
+              "error_message": "Agent ID must be lowercase alphanumeric with hyphens"
+            }
+          ]
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "config_not_found",
+          "condition": "openclaw.json does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_not_found"
+          }
+        },
+        {
+          "name": "config_parse_error",
+          "condition": "openclaw.json is malformed",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_parse_error"
+          }
+        },
+        {
+          "name": "agent_not_found",
+          "condition": "No agent with the given ID exists in openclaw.json",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "agent_not_found"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite query fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "db_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "agent_id is a valid non-empty branded AgentId string"
+      ],
+      "postconditions": [
+        "On success, data is a single Agent matching the requested ID",
+        "On agent_not_found, error message includes the requested agent_id"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "openclaw.json",
+          "description": "Reads agent config from filesystem"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Reads task count and token usage from SQLite (read-only query)"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 100,
+        "max_memory_mb": null,
+        "complexity": "O(a) where a = total agents (linear scan of config)"
+      }
+    },
+    {
+      "name": "getAgentSessions",
+      "description": "Fetch paginated session history for a specific agent. Reads session data from OpenClaw session files. Located in lib/data/agents.ts.",
+      "inputs": [
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent to fetch sessions for.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-z0-9-]+$",
+              "error_message": "Agent ID must be lowercase alphanumeric with hyphens"
+            }
+          ]
+        },
+        {
+          "name": "pagination",
+          "type_ref": "PaginationParams",
+          "required": true,
+          "default": "",
+          "description": "Pagination parameters.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "agent_not_found",
+          "condition": "No agent with the given ID exists",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "agent_not_found"
+          }
+        },
+        {
+          "name": "sessions_dir_missing",
+          "condition": "Sessions directory does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_not_found"
+          }
+        },
+        {
+          "name": "session_parse_error",
+          "condition": "One or more session files are malformed (skipped gracefully, logged)",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_parse_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "agent_id is a valid non-empty branded AgentId string",
+        "pagination.page >= 1",
+        "pagination.page_size >= 1 && pagination.page_size <= 100"
+      ],
+      "postconditions": [
+        "On success, data is PaginatedResult with items of type AgentSession",
+        "Sessions are ordered by started_at descending (newest first)",
+        "total_count reflects all sessions for this agent, not just current page",
+        "has_next is true iff (page * page_size) < total_count"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw sessions directory",
+          "description": "Reads session JSON files from the agent's session directory"
+        },
+        {
+          "kind": "logging",
+          "target": "console/logger",
+          "description": "Logs warnings for malformed session files that are skipped"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 300,
+        "max_memory_mb": null,
+        "complexity": "O(s log s) where s = total sessions for sorting, plus O(page_size) for page extraction"
+      }
+    },
+    {
+      "name": "getAgentTokenUsage",
+      "description": "Fetch time-bucketed token usage data for an agent over a time range. Returns recharts-ready data points. Located in lib/data/agents.ts.",
+      "inputs": [
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent to fetch token usage for.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-z0-9-]+$",
+              "error_message": "Agent ID must be lowercase alphanumeric with hyphens"
+            }
+          ]
+        },
+        {
+          "name": "time_range",
+          "type_ref": "TimeRange",
+          "required": true,
+          "default": "",
+          "description": "Time range to aggregate over.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "agent_not_found",
+          "condition": "No agent with the given ID exists",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "agent_not_found"
+          }
+        },
+        {
+          "name": "session_data_error",
+          "condition": "Cannot read or parse session data for token aggregation",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_parse_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "agent_id is a valid non-empty branded AgentId string",
+        "time_range is a valid TimeRange variant"
+      ],
+      "postconditions": [
+        "On success, data is list of TokenUsageDataPoint ordered by timestamp ascending",
+        "Data points are evenly bucketed: 1h→1min, 6h→5min, 24h→30min, 7d→6h, 30d→1d, all→1d",
+        "Each data point's total_tokens === input_tokens + output_tokens",
+        "Empty buckets are included with zero values (no gaps in timeline)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw sessions directory",
+          "description": "Reads session files to aggregate token usage per time bucket"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 500,
+        "max_memory_mb": 50,
+        "complexity": "O(s) where s = total sessions in time range"
+      }
+    },
+    {
+      "name": "getAgentTasks",
+      "description": "Fetch all tasks assigned to a specific agent from SQLite. Located in lib/data/agents.ts.",
+      "inputs": [
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent to fetch tasks for.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-z0-9-]+$",
+              "error_message": "Agent ID must be lowercase alphanumeric with hyphens"
+            }
+          ]
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "db_error",
+          "condition": "SQLite query fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "db_error"
+          }
+        },
+        {
+          "name": "agent_not_found",
+          "condition": "Agent ID does not exist in openclaw.json (validated before DB query)",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "agent_not_found"
+          }
+        }
+      ],
+      "preconditions": [
+        "agent_id is a valid non-empty branded AgentId string"
+      ],
+      "postconditions": [
+        "On success, data is list of AgentTask where each task.agent_id === agent_id",
+        "Tasks are ordered by priority (critical > high > medium > low), then by created_at descending",
+        "Returns empty list (not error) if agent exists but has no tasks"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "openclaw.json",
+          "description": "Validates agent exists before querying tasks"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Reads tasks table from SQLite (read-only query via better-sqlite3)"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 50,
+        "max_memory_mb": null,
+        "complexity": "O(t log t) where t = tasks for this agent"
+      }
+    },
+    {
+      "name": "getAgentDetail",
+      "description": "Compose full agent detail by calling getAgentById, getAgentSessions, getAgentTokenUsage, and getAgentTasks. Returns AgentDetail or first encountered error. Located in lib/data/agents.ts.",
+      "inputs": [
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent to fetch full detail for.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-z0-9-]+$",
+              "error_message": "Agent ID must be lowercase alphanumeric with hyphens"
+            }
+          ]
+        },
+        {
+          "name": "session_pagination",
+          "type_ref": "PaginationParams",
+          "required": false,
+          "default": "",
+          "description": "Pagination for session history.",
+          "validators": []
+        },
+        {
+          "name": "token_time_range",
+          "type_ref": "TimeRange",
+          "required": false,
+          "default": "7d",
+          "description": "Time range for token usage chart.",
+          "validators": []
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "agent_not_found",
+          "condition": "Agent does not exist in openclaw.json",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "agent_not_found"
+          }
+        },
+        {
+          "name": "config_not_found",
+          "condition": "openclaw.json does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_not_found"
+          }
+        },
+        {
+          "name": "config_parse_error",
+          "condition": "openclaw.json is malformed",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_parse_error"
+          }
+        },
+        {
+          "name": "session_data_error",
+          "condition": "Session files cannot be read",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_parse_error"
+          }
+        },
+        {
+          "name": "db_error",
+          "condition": "SQLite query fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "db_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "agent_id is a valid non-empty branded AgentId string"
+      ],
+      "postconditions": [
+        "On success, data is an AgentDetail with all sub-fields populated",
+        "agent field matches getAgentById result",
+        "recent_sessions matches getAgentSessions result items",
+        "token_usage_timeline matches getAgentTokenUsage result",
+        "assigned_tasks matches getAgentTasks result",
+        "If any sub-query fails, entire call returns the first error (fail-fast)"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "openclaw.json",
+          "description": "Reads agent config"
+        },
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw sessions directory",
+          "description": "Reads session files for history and token aggregation"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Reads tasks from SQLite (read-only)"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 800,
+        "max_memory_mb": 100,
+        "complexity": "O(a + s log s + t log t) where a = agents, s = sessions, t = tasks"
+      }
+    },
+    {
+      "name": "getAgentActivityEvents",
+      "description": "Fetch recent activity events for an agent from session data and task history. Used for initial SSR of the activity feed before SSE takes over. Located in lib/data/agents.ts.",
+      "inputs": [
+        {
+          "name": "agent_id",
+          "type_ref": "AgentId",
+          "required": true,
+          "default": "",
+          "description": "Agent to fetch events for.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-z0-9-]+$",
+              "error_message": "Agent ID must be lowercase alphanumeric with hyphens"
+            }
+          ]
+        },
+        {
+          "name": "limit",
+          "type_ref": "int",
+          "required": true,
+          "default": "50",
+          "description": "Maximum number of events to return.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=1 && <=500",
+              "error_message": "Limit must be between 1 and 500"
+            }
+          ]
+        }
+      ],
+      "output_type": "Result",
+      "error_cases": [
+        {
+          "name": "agent_not_found",
+          "condition": "Agent does not exist",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "agent_not_found"
+          }
+        },
+        {
+          "name": "data_error",
+          "condition": "Session files or SQLite query fails",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "file_parse_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "agent_id is a valid non-empty branded AgentId string"
+      ],
+      "postconditions": [
+        "On success, data is list of AgentActivityEvent ordered by timestamp descending",
+        "List length <= limit",
+        "Each event.agent_id === agent_id"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw sessions directory",
+          "description": "Reads session files for session start/end events"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Reads task history for task-related events (read-only)"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 200,
+        "max_memory_mb": null,
+        "complexity": "O(e log e) where e = total events before limit"
+      }
+    },
+    {
+      "name": "handleGetAgents",
+      "description": "API route handler for GET /api/agents. Calls getAgents(), serializes to AgentListResponse or AgentErrorResponse. Located in app/api/agents/route.ts.",
+      "inputs": [],
+      "output_type": "AgentListResponse",
+      "error_cases": [
+        {
+          "name": "config_missing",
+          "condition": "openclaw.json not found",
+          "error_type": "AgentErrorResponse",
+          "error_data": {
+            "status_code": "404"
+          }
+        },
+        {
+          "name": "config_invalid",
+          "condition": "openclaw.json malformed",
+          "error_type": "AgentErrorResponse",
+          "error_data": {
+            "status_code": "500"
+          }
+        },
+        {
+          "name": "internal_error",
+          "condition": "Unexpected error in data layer",
+          "error_type": "AgentErrorResponse",
+          "error_data": {
+            "status_code": "500"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "Returns HTTP 200 with AgentListResponse on success",
+        "Returns HTTP 404 with AgentErrorResponse when openclaw.json not found",
+        "Returns HTTP 500 with AgentErrorResponse on parse or DB errors",
+        "Response Content-Type is application/json",
+        "fetched_at is set to current ISO 8601 timestamp"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "openclaw.json",
+          "description": "Via getAgents() data layer call"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Via getAgents() data layer call (read-only)"
+        },
+        {
+          "kind": "network_call",
+          "target": "HTTP response",
+          "description": "Returns JSON response to client"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 300,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "handleGetAgentById",
+      "description": "API route handler for GET /api/agents/[agentId]. Validates agentId param with Zod, calls getAgentDetail(), serializes to AgentDetailResponse or AgentErrorResponse. Located in app/api/agents/[agentId]/route.ts.",
+      "inputs": [
+        {
+          "name": "agent_id",
+          "type_ref": "str",
+          "required": true,
+          "default": "",
+          "description": "Agent ID from URL path parameter [agentId]. Validated via Zod.",
+          "validators": [
+            {
+              "kind": "regex",
+              "expression": "^[a-z0-9-]+$",
+              "error_message": "Agent ID must be lowercase alphanumeric with hyphens"
+            },
+            {
+              "kind": "length",
+              "expression": ">=1 && <=64",
+              "error_message": "Agent ID must be 1-64 characters"
+            }
+          ]
+        },
+        {
+          "name": "time_range",
+          "type_ref": "str",
+          "required": false,
+          "default": "7d",
+          "description": "Optional query param for token usage time range. Validated to TimeRange enum.",
+          "validators": []
+        },
+        {
+          "name": "sessions_page",
+          "type_ref": "int",
+          "required": false,
+          "default": "1",
+          "description": "Optional query param for session history pagination.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=1",
+              "error_message": "Page must be >= 1"
+            }
+          ]
+        },
+        {
+          "name": "sessions_page_size",
+          "type_ref": "int",
+          "required": false,
+          "default": "20",
+          "description": "Optional query param for sessions per page.",
+          "validators": [
+            {
+              "kind": "range",
+              "expression": ">=1 && <=100",
+              "error_message": "Page size must be 1-100"
+            }
+          ]
+        }
+      ],
+      "output_type": "AgentDetailResponse",
+      "error_cases": [
+        {
+          "name": "invalid_agent_id",
+          "condition": "agentId path param fails Zod validation",
+          "error_type": "AgentErrorResponse",
+          "error_data": {
+            "status_code": "400"
+          }
+        },
+        {
+          "name": "invalid_query_params",
+          "condition": "Query params fail Zod validation",
+          "error_type": "AgentErrorResponse",
+          "error_data": {
+            "status_code": "400"
+          }
+        },
+        {
+          "name": "agent_not_found",
+          "condition": "No agent with given ID exists",
+          "error_type": "AgentErrorResponse",
+          "error_data": {
+            "status_code": "404"
+          }
+        },
+        {
+          "name": "config_missing",
+          "condition": "openclaw.json not found",
+          "error_type": "AgentErrorResponse",
+          "error_data": {
+            "status_code": "404"
+          }
+        },
+        {
+          "name": "internal_error",
+          "condition": "Data layer error",
+          "error_type": "AgentErrorResponse",
+          "error_data": {
+            "status_code": "500"
+          }
+        }
+      ],
+      "preconditions": [],
+      "postconditions": [
+        "Returns HTTP 200 with AgentDetailResponse on success",
+        "Returns HTTP 400 with AgentErrorResponse on invalid agentId or query params",
+        "Returns HTTP 404 with AgentErrorResponse when agent not found",
+        "Returns HTTP 500 with AgentErrorResponse on internal errors",
+        "Response Content-Type is application/json"
+      ],
+      "idempotent": true,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "reads_file",
+          "target": "openclaw.json",
+          "description": "Via getAgentDetail() data layer call"
+        },
+        {
+          "kind": "reads_file",
+          "target": "OpenClaw sessions directory",
+          "description": "Via getAgentDetail() data layer call"
+        },
+        {
+          "kind": "mutates_state",
+          "target": "SQLite database",
+          "description": "Via getAgentDetail() data layer call (read-only)"
+        },
+        {
+          "kind": "network_call",
+          "target": "HTTP response",
+          "description": "Returns JSON response to client"
+        }
+      ],
+      "performance_budget": {
+        "p95_latency_ms": 1000,
+        "max_memory_mb": null,
+        "complexity": null
+      }
+    },
+    {
+      "name": "emitAgentSSEEvent",
+      "description": "Emit an agent-related SSE event to the event bus for distribution to connected clients. Located in lib/sse/agent-events.ts. Called by file watchers when openclaw.json or session files change.",
+      "inputs": [
+        {
+          "name": "event",
+          "type_ref": "SSEAgentEvent",
+          "required": true,
+          "default": "",
+          "description": "The agent event to emit. Must be one of the SSEAgentEvent union variants.",
+          "validators": []
+        }
+      ],
+      "output_type": "None",
+      "error_cases": [
+        {
+          "name": "event_bus_not_initialized",
+          "condition": "SSE event bus has not been started",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "db_error"
+          }
+        },
+        {
+          "name": "serialization_error",
+          "condition": "Event cannot be serialized to JSON",
+          "error_type": "DataError",
+          "error_data": {
+            "kind": "validation_error"
+          }
+        }
+      ],
+      "preconditions": [
+        "event is a valid SSEAgentEvent union member",
+        "SSE event bus is initialized"
+      ],
+      "postconditions": [
+        "Event is enqueued on the SSE event bus for all subscribed clients",
+        "Clients with agent_id filter only receive events matching their filter",
+        "Event is serialized as JSON in the SSE data field"
+      ],
+      "idempotent": false,
+      "side_effects": [],
+      "structured_side_effects": [
+        {
+          "kind": "mutates_state",
+          "target": "SSE event bus",
+          "description": "Enqueues event for distribution to connected SSE clients"
+        },
+        {
+          "kind": "logging",
+          "target": "console/logger",
+          "description": "Logs event emission for observability"
+        }
+      ],
+      "performance_budget": null
+    }
+  ],
+  "dependencies": [],
+  "dependency_contracts": {},
+  "invariants": [
+    "All data access goes through lib/data/ layer — components and API routes never read files or query SQLite directly",
+    "All external input (API params, file content) is validated with Zod schemas before use",
+    "No `any` types — use `unknown` + type narrowing when type is uncertain (per project standards)",
+    "Data functions return Result<T, DataError> — never throw exceptions for expected error conditions",
+    "All timestamps are ISO 8601 UTC strings (no Date objects across serialization boundaries)",
+    "AgentId is a branded string type — plain strings must be cast through a validation function",
+    "openclaw.json parse failures produce graceful error state UI (AC2), never crash the page",
+    "Token usage total_tokens always equals input_tokens + output_tokens",
+    "Session list is always sorted by started_at descending (newest first)",
+    "Tasks are sorted by priority (critical > high > medium > low) then created_at descending",
+    "SSE events are namespaced with 'agent:' prefix for the agent domain",
+    "API routes return typed JSON with Content-Type: application/json",
+    "Client components ('use client') receive serialized data as props — never fetch data themselves on initial render",
+    "Server components are the default — 'use client' only for interactivity (charts, SSE subscription, event handlers)",
+    "Empty data states (no agents, no sessions, no tasks) are valid success cases, not errors",
+    "Malformed individual session files are skipped with a warning log, not treated as fatal errors"
+  ],
+  "requires": [
+    "lib/db/sqlite - better-sqlite3 typed query wrappers",
+    "lib/openclaw/config - filesystem path resolution for openclaw.json",
+    "lib/sse/event-bus - SSE event emission interface",
+    "recharts - LineChart component for token usage visualization",
+    "zod - schema validation library"
+  ],
+  "processing_register": "pragmatic-implementation"
+}
