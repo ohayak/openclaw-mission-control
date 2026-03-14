@@ -3,6 +3,7 @@
  * Uses the same axios/OpenAPI base as the existing client.
  */
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useEffect, useState } from "react"
 import axios from "axios"
 import { OpenAPI } from "@/client"
 
@@ -357,7 +358,10 @@ export function usePactStatus(projectId: string, enabled = true) {
     queryKey: ["pact", projectId, "status"],
     queryFn: () => apiGet<PactStatus>(`/pact/${projectId}/status`),
     enabled: !!projectId && enabled,
-    refetchInterval: 30000,
+    // Poll every 3s when running, 30s otherwise (TanStack Query v5 dynamic interval)
+    refetchInterval: (query) => {
+      return query.state.data?.status === "running" ? 3000 : 30000
+    },
     retry: false,
   })
 }
@@ -369,6 +373,141 @@ export function usePactComponents(projectId: string, enabled = true) {
     enabled: !!projectId && enabled,
     retry: false,
   })
+}
+
+export function usePactInit(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => apiPost<{ status: string }>(`/pact/${projectId}/init`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pact", projectId, "status"] })
+    },
+  })
+}
+
+export function usePactRun(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (phase?: string) =>
+      apiPost<{ status: string }>(`/pact/${projectId}/run`, phase ? { phase } : {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pact", projectId, "status"] })
+    },
+  })
+}
+
+export function usePactInterviewStart(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => apiPost<{ status: string }>(`/pact/${projectId}/interview/start`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pact", projectId, "status"] })
+    },
+  })
+}
+
+export function usePactComponentRetest(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (componentId: string) =>
+      apiPost<{ status: string }>(`/pact/${projectId}/components/${componentId}/retest`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pact", projectId, "status"] })
+      qc.invalidateQueries({ queryKey: ["pact", projectId, "components"] })
+    },
+  })
+}
+
+export interface PactComponentContract {
+  filename: string
+  content: string
+}
+
+export interface PactComponentTestFile {
+  filename: string
+  content: string
+}
+
+export interface PactComponentTests {
+  files: PactComponentTestFile[]
+}
+
+export function usePactComponentContract(projectId: string, componentId: string, enabled = true) {
+  return useQuery({
+    queryKey: ["pact", projectId, "components", componentId, "contract"],
+    queryFn: () => apiGet<PactComponentContract>(`/pact/${projectId}/components/${componentId}/contract`),
+    enabled: !!projectId && !!componentId && enabled,
+    retry: false,
+  })
+}
+
+export function usePactComponentTests(projectId: string, componentId: string, enabled = true) {
+  return useQuery({
+    queryKey: ["pact", projectId, "components", componentId, "tests"],
+    queryFn: () => apiGet<PactComponentTests>(`/pact/${projectId}/components/${componentId}/tests`),
+    enabled: !!projectId && !!componentId && enabled,
+    retry: false,
+  })
+}
+
+/**
+ * SSE log streaming hook.
+ * Opens an EventSource to the PACT log stream endpoint when enabled.
+ * Uses query-param token auth (EventSource doesn't support custom headers).
+ * Cleans up the EventSource on unmount.
+ */
+export function usePactStream(projectId: string, enabled = false) {
+  const [lines, setLines] = useState<string[]>([])
+  const [done, setDone] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const qc = useQueryClient()
+
+  useEffect(() => {
+    if (!enabled || !projectId) return
+
+    const token = getToken()
+    const base = OpenAPI.BASE || ""
+    // Pass token as query param — EventSource doesn't support Authorization headers
+    const url = `${base}/api/v1/pact/${projectId}/stream?token=${encodeURIComponent(token)}`
+    const es = new EventSource(url)
+
+    es.onmessage = (e) => {
+      setLines((prev) => [...prev, e.data])
+    }
+
+    es.addEventListener("done", () => {
+      setDone(true)
+      es.close()
+      // Refresh status + components when run completes
+      qc.invalidateQueries({ queryKey: ["pact", projectId, "status"] })
+      qc.invalidateQueries({ queryKey: ["pact", projectId, "components"] })
+    })
+
+    es.addEventListener("error", (e) => {
+      // Custom SSE error event from backend (not connection error)
+      const data = (e as MessageEvent).data
+      setError(data || "An error occurred during PACT execution")
+      es.close()
+    })
+
+    es.onerror = () => {
+      // Connection error — check if it's an auth issue
+      setError("Stream connection failed. If the issue persists, please reload the page.")
+      es.close()
+    }
+
+    return () => {
+      es.close()
+    }
+  }, [projectId, enabled, qc])
+
+  function reset() {
+    setLines([])
+    setDone(false)
+    setError(null)
+  }
+
+  return { lines, done, error, reset }
 }
 
 // ---------------------------------------------------------------------------

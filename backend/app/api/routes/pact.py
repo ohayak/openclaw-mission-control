@@ -1,17 +1,21 @@
 """
 PACT API — reads PACT project directories and spawns PACT CLI subprocesses.
 """
-import asyncio
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from jwt.exceptions import InvalidTokenError
+from pydantic import BaseModel, ValidationError
+from sqlmodel import Session
 
-from app.api.deps import CurrentUser, SessionDep
-from app.models import PactComponent, PactHealth, PactStatus, Project
+from app.api.deps import CurrentUser, SessionDep, get_db
+from app.core import security
+from app.core.config import settings
+from app.models import PactComponent, PactHealth, PactStatus, Project, TokenPayload, User
 from app.services.pact_executor import (
     get_logs,
     is_running,
@@ -44,6 +48,28 @@ def _get_project_dir(project_id: uuid.UUID, session: SessionDep) -> str:
     if not project.pact_dir:
         raise HTTPException(status_code=400, detail="Project has no PACT directory configured")
     return project.pact_dir
+
+
+def _get_user_from_token(token: str, session: Session) -> User:
+    """Validate a JWT token string and return the associated user.
+
+    Used for endpoints that accept the token as a query param (e.g. SSE streams
+    where EventSource doesn't support custom Authorization headers).
+    """
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[security.ALGORITHM])
+        token_data = TokenPayload(**payload)
+    except (InvalidTokenError, ValidationError):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Could not validate credentials",
+        )
+    user = session.get(User, token_data.sub)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    return user
 
 
 # ---------------------------------------------------------------------------
@@ -143,14 +169,29 @@ def pact_run(
 def pact_stream(
     project_id: uuid.UUID,
     session: SessionDep,
-    current_user: CurrentUser,
+    # Accept token as query param for SSE (EventSource doesn't support headers)
+    # Standard Authorization header is also accepted via current_user fallback
+    token: Annotated[str | None, Query()] = None,
+    current_user: CurrentUser | None = None,
 ) -> StreamingResponse:
     """
     SSE stream of PACT log output.
     Tails the log file while the process runs, then sends a 'done' event.
     If no log file exists (spawn failed), sends an error SSE event.
+
+    Auth: accepts Bearer token in Authorization header OR ?token=... query param
+    (EventSource API in browsers does not support custom headers).
     """
-    _get_project_dir(project_id, session)  # auth + existence check only
+    # Resolve auth: header token (current_user) or query param token
+    if current_user is None:
+        if token is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Authentication required",
+            )
+        _get_user_from_token(token, session)
+
+    _get_project_dir(project_id, session)  # project existence check
     pid_str = str(project_id)
 
     def event_generator():

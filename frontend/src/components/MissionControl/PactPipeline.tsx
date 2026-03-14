@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge"
+import { PactPhaseActions } from "@/components/MissionControl/PactPhaseActions"
 import type { PactStatus } from "@/hooks/useMissionControl"
 import { CheckCircle2, Circle, Loader2 } from "lucide-react"
 
@@ -32,9 +33,11 @@ function stageIndex(phase: string): number {
 
 interface PactPipelineProps {
   status: PactStatus
+  /** When provided, action buttons are shown below the current phase */
+  projectId?: string
 }
 
-export function PactPipeline({ status }: PactPipelineProps) {
+export function PactPipeline({ status, projectId }: PactPipelineProps) {
   const currentIdx = stageIndex(status.phase)
   const isRunning = status.status === "running"
 
@@ -119,6 +122,18 @@ export function PactPipeline({ status }: PactPipelineProps) {
             <p className="font-semibold text-green-400">{status.components_implemented}</p>
             <p className="text-muted-foreground">Done</p>
           </div>
+        </div>
+      )}
+
+      {/* Action buttons for the current phase (only when projectId provided) */}
+      {projectId && status.phase !== "unknown" && (
+        <div className="pt-2 border-t border-border">
+          <p className="text-xs text-muted-foreground mb-2">Actions for current phase:</p>
+          <PactPhaseActions
+            projectId={projectId}
+            pactStatus={status}
+            phase={status.phase}
+          />
         </div>
       )}
     </div>
