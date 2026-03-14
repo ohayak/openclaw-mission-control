@@ -52,6 +52,8 @@ export interface Project {
   description?: string
   status: "active" | "paused" | "completed" | "archived"
   pact_dir?: string
+  model_override?: string | null
+  auto_advance?: boolean
   created_at: string
   updated_at: string
 }
@@ -61,6 +63,8 @@ export interface ProjectCreate {
   description?: string
   status?: Project["status"]
   pact_dir?: string
+  model_override?: string | null
+  auto_advance?: boolean
 }
 
 export interface ProjectUpdate {
@@ -68,6 +72,8 @@ export interface ProjectUpdate {
   description?: string
   status?: Project["status"]
   pact_dir?: string
+  model_override?: string | null
+  auto_advance?: boolean
 }
 
 export type TaskStatus = "backlog" | "in_progress" | "review" | "done"

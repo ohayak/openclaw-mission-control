@@ -163,6 +163,8 @@ class ProjectBase(SQLModel):
     description: str | None = Field(default=None, max_length=2048)
     status: ProjectStatus = Field(default=ProjectStatus.active)
     pact_dir: str | None = Field(default=None, max_length=1024)  # filesystem path to PACT project dir
+    model_override: str | None = Field(default=None, max_length=255)  # override AI model for PACT runs
+    auto_advance: bool = Field(default=False)  # auto-advance to next phase on completion
 
 
 class ProjectCreate(ProjectBase):
@@ -174,6 +176,8 @@ class ProjectUpdate(SQLModel):
     description: str | None = Field(default=None, max_length=2048)
     status: ProjectStatus | None = None
     pact_dir: str | None = Field(default=None, max_length=1024)
+    model_override: str | None = Field(default=None, max_length=255)
+    auto_advance: bool | None = None
 
 
 class Project(ProjectBase, table=True):
@@ -193,6 +197,8 @@ class ProjectPublic(ProjectBase):
     id: uuid.UUID
     created_at: datetime
     updated_at: datetime
+    model_override: str | None = None
+    auto_advance: bool = False
 
 
 class ProjectsPublic(SQLModel):

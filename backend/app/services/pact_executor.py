@@ -46,7 +46,12 @@ def is_running(project_id: str) -> bool:
         return False
 
 
-def spawn_pact(project_id: str, project_dir: str, args: list[str]) -> None:
+def spawn_pact(
+    project_id: str,
+    project_dir: str,
+    args: list[str],
+    model_override: str | None = None,
+) -> None:
     """
     Spawn `pact <args>` in project_dir.
 
@@ -54,6 +59,8 @@ def spawn_pact(project_id: str, project_dir: str, args: list[str]) -> None:
         project_id: UUID string identifying the project (used for lock/log file names)
         project_dir: Absolute path to the PACT project directory
         args: Arguments to pass to the pact CLI (e.g. ["run", "interview", "."])
+        model_override: Optional model name to set as ANTHROPIC_MODEL env var.
+                        When None, inherits parent environment unchanged.
 
     Raises:
         RuntimeError: If PACT is already running for this project
@@ -71,6 +78,13 @@ def spawn_pact(project_id: str, project_dir: str, args: list[str]) -> None:
     log_path = _log_path(project_id)
     lock_path = _lock_path(project_id)
 
+    # Build environment: inherit parent env, optionally override model
+    env: dict | None = None
+    if model_override:
+        import os
+        env = dict(os.environ)
+        env["ANTHROPIC_MODEL"] = model_override
+
     log_file = open(log_path, "a")  # noqa: WPS515 — stays open until thread closes it
     try:
         proc = subprocess.Popen(
@@ -78,7 +92,7 @@ def spawn_pact(project_id: str, project_dir: str, args: list[str]) -> None:
             cwd=project_dir,
             stdout=log_file,
             stderr=subprocess.STDOUT,
-            env=None,  # inherit parent environment (ANTHROPIC_API_KEY etc.)
+            env=env,  # None = inherit parent env; dict = inherit + model override
         )
     except Exception:
         log_file.close()

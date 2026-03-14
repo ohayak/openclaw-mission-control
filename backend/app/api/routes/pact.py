@@ -112,6 +112,12 @@ def pact_health(
 # ---------------------------------------------------------------------------
 
 
+def _get_project_model_override(project_id: uuid.UUID, session: SessionDep) -> str | None:
+    """Return the model_override for a project, or None if not set."""
+    project = session.get(Project, project_id)
+    return getattr(project, "model_override", None) if project else None
+
+
 @router.post("/{project_id}/init", status_code=202)
 def pact_init(
     project_id: uuid.UUID,
@@ -120,8 +126,9 @@ def pact_init(
 ) -> dict:
     """Spawn `pact init .` in the project directory."""
     pact_dir = _get_project_dir(project_id, session)
+    model_override = _get_project_model_override(project_id, session)
     try:
-        spawn_pact(str(project_id), pact_dir, ["init", "."])
+        spawn_pact(str(project_id), pact_dir, ["init", "."], model_override=model_override)
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except FileNotFoundError as e:
@@ -137,8 +144,9 @@ def pact_interview_start(
 ) -> dict:
     """Spawn `pact run interview .` in the project directory."""
     pact_dir = _get_project_dir(project_id, session)
+    model_override = _get_project_model_override(project_id, session)
     try:
-        spawn_pact(str(project_id), pact_dir, ["run", "interview", "."])
+        spawn_pact(str(project_id), pact_dir, ["run", "interview", "."], model_override=model_override)
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except FileNotFoundError as e:
@@ -155,9 +163,10 @@ def pact_run(
 ) -> dict:
     """Spawn `pact run [phase] .` in the project directory."""
     pact_dir = _get_project_dir(project_id, session)
+    model_override = _get_project_model_override(project_id, session)
     args = ["run"] + ([body.phase] if body.phase else []) + ["."]
     try:
-        spawn_pact(str(project_id), pact_dir, args)
+        spawn_pact(str(project_id), pact_dir, args, model_override=model_override)
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except FileNotFoundError as e:
@@ -281,8 +290,9 @@ def pact_component_retest(
 ) -> dict:
     """Spawn `pact test <component_id> .` to retest a single component."""
     pact_dir = _get_project_dir(project_id, session)
+    model_override = _get_project_model_override(project_id, session)
     try:
-        spawn_pact(str(project_id), pact_dir, ["test", component_id, "."])
+        spawn_pact(str(project_id), pact_dir, ["test", component_id, "."], model_override=model_override)
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except FileNotFoundError as e:
