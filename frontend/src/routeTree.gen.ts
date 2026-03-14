@@ -17,6 +17,7 @@ import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
 import { Route as LayoutProjectsRouteImport } from './routes/_layout/projects'
+import { Route as LayoutProjectsIndexRouteImport } from './routes/_layout/projects.index'
 import { Route as LayoutItemsRouteImport } from './routes/_layout/items'
 import { Route as LayoutCostsRouteImport } from './routes/_layout/costs'
 import { Route as LayoutAgentsRouteImport } from './routes/_layout/agents'
@@ -64,6 +65,11 @@ const LayoutProjectsRoute = LayoutProjectsRouteImport.update({
   id: '/projects',
   path: '/projects',
   getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutProjectsIndexRoute = LayoutProjectsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => LayoutProjectsRoute,
 } as any)
 const LayoutItemsRoute = LayoutItemsRouteImport.update({
   id: '/items',
@@ -119,6 +125,7 @@ export interface FileRoutesByFullPath {
   '/costs': typeof LayoutCostsRoute
   '/items': typeof LayoutItemsRoute
   '/projects': typeof LayoutProjectsRouteWithChildren
+  '/projects/': typeof LayoutProjectsIndexRoute
   '/settings': typeof LayoutSettingsRoute
   '/agents/$agentId': typeof LayoutAgentsAgentIdRoute
   '/projects/$projectId': typeof LayoutProjectsProjectIdRouteWithChildren
@@ -135,6 +142,7 @@ export interface FileRoutesByTo {
   '/costs': typeof LayoutCostsRoute
   '/items': typeof LayoutItemsRoute
   '/projects': typeof LayoutProjectsRouteWithChildren
+  '/projects/': typeof LayoutProjectsIndexRoute
   '/settings': typeof LayoutSettingsRoute
   '/': typeof LayoutIndexRoute
   '/agents/$agentId': typeof LayoutAgentsAgentIdRoute
@@ -154,6 +162,7 @@ export interface FileRoutesById {
   '/_layout/costs': typeof LayoutCostsRoute
   '/_layout/items': typeof LayoutItemsRoute
   '/_layout/projects': typeof LayoutProjectsRouteWithChildren
+  '/_layout/projects/': typeof LayoutProjectsIndexRoute
   '/_layout/settings': typeof LayoutSettingsRoute
   '/_layout/': typeof LayoutIndexRoute
   '/_layout/agents/$agentId': typeof LayoutAgentsAgentIdRoute
@@ -174,6 +183,7 @@ export interface FileRouteTypes {
     | '/costs'
     | '/items'
     | '/projects'
+    | '/projects/'
     | '/settings'
     | '/agents/$agentId'
     | '/projects/$projectId'
@@ -190,6 +200,7 @@ export interface FileRouteTypes {
     | '/costs'
     | '/items'
     | '/projects'
+    | '/projects/'
     | '/settings'
     | '/'
     | '/agents/$agentId'
@@ -208,6 +219,7 @@ export interface FileRouteTypes {
     | '/_layout/costs'
     | '/_layout/items'
     | '/_layout/projects'
+    | '/_layout/projects/'
     | '/_layout/settings'
     | '/_layout/'
     | '/_layout/agents/$agentId'
@@ -280,6 +292,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/projects'
       preLoaderRoute: typeof LayoutProjectsRouteImport
       parentRoute: typeof LayoutRoute
+    }
+    '/_layout/projects/': {
+      id: '/_layout/projects/'
+      path: '/'
+      fullPath: '/projects/'
+      preLoaderRoute: typeof LayoutProjectsIndexRouteImport
+      parentRoute: typeof LayoutProjectsRoute
     }
     '/_layout/items': {
       id: '/_layout/items'
@@ -367,10 +386,12 @@ const LayoutProjectsProjectIdRouteWithChildren =
   )
 
 interface LayoutProjectsRouteChildren {
+  LayoutProjectsIndexRoute: typeof LayoutProjectsIndexRoute
   LayoutProjectsProjectIdRoute: typeof LayoutProjectsProjectIdRouteWithChildren
 }
 
 const LayoutProjectsRouteChildren: LayoutProjectsRouteChildren = {
+  LayoutProjectsIndexRoute: LayoutProjectsIndexRoute,
   LayoutProjectsProjectIdRoute: LayoutProjectsProjectIdRouteWithChildren,
 }
 
