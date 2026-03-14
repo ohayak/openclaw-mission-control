@@ -157,6 +157,102 @@ class TestParseSessionFile:
         info = _parse_session_file("jim", missing, is_active=False)
         assert info is None
 
+    def test_cache_read_tokens_produce_positive_counts(self, tmp_path):
+        """
+        Regression test: sessions with large cacheRead values must NOT produce
+        negative token counts.  The totalTokens field already accounts for all
+        tokens; we must NOT subtract cacheRead from input.
+        """
+        # Simulate a realistic high-cache session (like the ones that caused
+        # Jim to show -24,273,860 tokens in production).
+        session_file = tmp_path / "high_cache.jsonl"
+        lines = [
+            json.dumps({"type": "session", "id": "cache-test-1",
+                        "timestamp": "2024-06-01T00:00:00Z", "cwd": "/workspace"}),
+        ]
+        # 10 messages each with large cacheRead (simulates a long conversation
+        # where almost all input tokens are served from cache).
+        for i in range(10):
+            lines.append(json.dumps({
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-opus-4-6",
+                    "usage": {
+                        "input": 23153,
+                        "output": 184,
+                        "cacheRead": 22980,   # almost all input is cached
+                        "cacheWrite": 0,
+                        "totalTokens": 23337,
+                    },
+                },
+            }))
+        session_file.write_text("\n".join(lines))
+
+        info = _parse_session_file("jim", session_file, is_active=False)
+
+        assert info is not None, "Parser should not return None for valid file"
+        assert info.total_tokens > 0, (
+            f"total_tokens must be POSITIVE but got {info.total_tokens}. "
+            "cacheRead must NOT be subtracted from input."
+        )
+        assert info.input_tokens >= 0, "input_tokens must not be negative"
+        assert info.output_tokens >= 0, "output_tokens must not be negative"
+        # With 10 messages of totalTokens=23337, total should be 233370
+        assert info.total_tokens == 233370
+
+    def test_total_tokens_used_when_available(self, tmp_path):
+        """When totalTokens is present, it should be used instead of input+output alone."""
+        session_file = tmp_path / "with_total.jsonl"
+        session_file.write_text(
+            json.dumps({"type": "session", "id": "tot-test",
+                        "timestamp": "2024-01-01T00:00:00Z", "cwd": "/"}) + "\n" +
+            json.dumps({
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-6",
+                    "usage": {
+                        "input": 100,
+                        "output": 50,
+                        "cacheRead": 80,
+                        "cacheWrite": 0,
+                        "totalTokens": 150,  # = input + output (not double-counting cache)
+                    },
+                },
+            }) + "\n"
+        )
+
+        info = _parse_session_file("jim", session_file, is_active=False)
+        assert info is not None
+        assert info.total_tokens == 150
+        assert info.total_tokens > 0
+
+    def test_fallback_to_input_output_when_no_total_tokens(self, tmp_path):
+        """When totalTokens is absent, input+output is used as fallback."""
+        session_file = tmp_path / "no_total.jsonl"
+        session_file.write_text(
+            json.dumps({"type": "session", "id": "fallback-test",
+                        "timestamp": "2024-01-01T00:00:00Z", "cwd": "/"}) + "\n" +
+            json.dumps({
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-6",
+                    "usage": {
+                        "input": 100,
+                        "output": 50,
+                        # no totalTokens field
+                    },
+                },
+            }) + "\n"
+        )
+
+        info = _parse_session_file("jim", session_file, is_active=False)
+        assert info is not None
+        assert info.total_tokens == 150
+        assert info.total_tokens > 0
+
 
 class TestCachingBehavior:
     def test_config_cache_hit_within_ttl(self, tmp_path):

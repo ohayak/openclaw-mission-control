@@ -195,8 +195,20 @@ def _parse_session_file(agent_id: str, path: Path, is_active: bool) -> SessionIn
                     if msg.get("role") == "assistant":
                         message_count += 1
                         usage = msg.get("usage", {})
-                        input_tokens += usage.get("input", 0)
-                        output_tokens += usage.get("output", 0)
+                        # Use totalTokens when available — it already accounts
+                        # for everything (input + output + cache).
+                        # Do NOT subtract cacheRead/cacheWrite; they are a
+                        # breakdown of input, not additional tokens.
+                        total_tok = usage.get("totalTokens")
+                        in_tok = usage.get("input", 0)
+                        out_tok = usage.get("output", 0)
+                        if total_tok is not None:
+                            # Derive output from reported value; treat remainder as input
+                            output_tokens += out_tok
+                            input_tokens += total_tok - out_tok
+                        else:
+                            input_tokens += in_tok
+                            output_tokens += out_tok
                         if not model:
                             model = msg.get("model")
 
